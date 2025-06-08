@@ -7,6 +7,8 @@ use url::Url;
 
 use tracing::{debug, error, info, trace};
 
+use super::types::Pair;
+
 pub(crate) async fn read_message<M>(
     reader: &mut BufReader<impl AsyncReadExt + Unpin>,
 ) -> Result<Option<M>, Box<dyn std::error::Error + Send + Sync>>
@@ -20,27 +22,40 @@ where
         let mut line = String::new();
         let bytes_read = reader.read_line(&mut line).await?;
 
+        trace!(%bytes_read, "Read line");
+
         if bytes_read == 0 {
+            trace!(%bytes_read, "Breaking");
             break;
         }
 
         let trimmed = line.trim();
+        trace!(%trimmed, "Reading line");
+
         if trimmed.is_empty() {
+            trace!("Empty line detected");
             break; // End of headers
         }
-
-        trace!(%trimmed, "Reading line");
 
         if let Some((key, value)) = trimmed.split_once(":") {
             let key = key.trim();
             let value = value.trim();
 
+            trace!(%key, %value, "Header");
+
             headers.insert(key.to_lowercase(), value.to_lowercase());
 
-            if key.eq_ignore_ascii_case("content-length") {
+            if key.eq_ignore_ascii_case("content-length")
+                || key.eq_ignore_ascii_case("ontent-length")
+            {
                 content_length = Some(value.parse()?);
             }
         }
+    }
+
+    if content_length.is_none() {
+        trace!("Content-Length header not found, returning None");
+        return Ok(None);
     }
 
     let length = content_length.ok_or("Content-Length header not found")?;
@@ -49,7 +64,7 @@ where
     let mut buf = vec![0; length];
 
     reader.read_exact(&mut buf).await?;
-    info!("RAW: {}", String::from_utf8_lossy(&buf));
+    trace!("RAW: {}", String::from_utf8_lossy(&buf));
     let msg = serde_json::from_slice(&buf)?;
 
     Ok(msg)
@@ -70,13 +85,28 @@ where
 
     Ok(())
 }
-// Define your host and container base paths
 const HOST_WORKSPACE_ROOT: &str = "/Users/richard/dev/ddirt/debug/app";
-const CONTAINER_WORKSPACE_ROOT: &str = "/usr/src/app"; // Adjust this to your actual Docker mount point
+const CONTAINER_WORKSPACE_ROOT: &str = "/usr/src/app";
 
 pub(crate) fn redirect_uri(
     mut value: Value,
+    from: &Pair,
+    to: &Pair,
 ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    let from_path_str: &str;
+    let to_path_str: &str;
+
+    match from {
+        Pair::Client => {
+            from_path_str = HOST_WORKSPACE_ROOT;
+            to_path_str = CONTAINER_WORKSPACE_ROOT;
+        }
+        Pair::Server => {
+            from_path_str = CONTAINER_WORKSPACE_ROOT;
+            to_path_str = HOST_WORKSPACE_ROOT;
+        }
+    }
+
     if let Some(uri_str) = value.get_mut("uri").and_then(|u| u.as_str()) {
         trace!(%uri_str, "Received URI");
         match Url::parse(uri_str) {
@@ -86,13 +116,13 @@ pub(crate) fn redirect_uri(
                 if scheme == "file" {
                     if let Some(path) = url.to_file_path().ok() {
                         trace!(?path, "Transformed");
-                        let host_root = Path::new(HOST_WORKSPACE_ROOT);
-                        let container_root = Path::new(CONTAINER_WORKSPACE_ROOT);
+                        let from_path = Path::new(from_path_str);
+                        let to_path = Path::new(to_path_str);
 
-                        if let Ok(relative_path) = path.strip_prefix(host_root) {
+                        if let Ok(relative_path) = path.strip_prefix(from_path) {
                             trace!(?relative_path, "Prefix stripped");
 
-                            let new_path = container_root.join(relative_path);
+                            let new_path = to_path.join(relative_path);
                             trace!(?new_path, "Joined path");
 
                             let new_uri = Url::from_file_path(&new_path)
@@ -119,12 +149,16 @@ pub(crate) fn redirect_uri(
 
     // Recursively search for "uri" fields in nested JSON objects/arrays
     if let Some(obj) = value.as_object_mut() {
+        trace!(?obj, "Searching nested uris in object");
         for (_, v) in obj.iter_mut() {
-            *v = redirect_uri(v.take())?;
+            trace!(?v, "Nested");
+            *v = redirect_uri(v.take(), from, to)?;
         }
     } else if let Some(arr) = value.as_array_mut() {
+        trace!(?arr, "Searching nested uris in array");
         for v in arr.iter_mut() {
-            *v = redirect_uri(v.take())?;
+            trace!(?v, "Nested");
+            *v = redirect_uri(v.take(), from, to)?;
         }
     }
 

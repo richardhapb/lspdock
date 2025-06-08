@@ -1,13 +1,16 @@
-use std::process::Stdio;
-use tokio::process::Command;
+use lsp::types::DockerStreamReader;
 use tracing::{Level, error, span, trace};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod lsp;
 mod proxy;
 
-use tokio::io::AsyncReadExt;
+use tokio::io::{BufReader, BufWriter};
 
-use proxy::io::{forward_proxy, lsp_stdio};
+use bollard::Docker;
+use bollard::exec::{CreateExecOptions, StartExecResults};
+use proxy::{config::ProxyConfig, io::forward_proxy};
+
+use std::default::Default;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -27,36 +30,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     trace!("Initializing LSP");
 
-    let mut child = Command::new("docker")
-        .args(&["exec", "-i", "debug-web-1", "pyright-langserver", "--stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+    let config = CreateExecOptions {
+        cmd: Some(vec!["pyright-langserver", "--stdio"]),
+        attach_stdin: Some(true),
+        attach_stdout: Some(true),
+        ..Default::default()
+    };
 
-    let mut lsp_stderr_raw = child.stderr.take().expect("Cannot take LSP server stderr");
+    let docker = Docker::connect_with_unix_defaults().unwrap();
+    let exec = docker.create_exec("debug-web-1", config).await?;
+    let stream = docker.start_exec(&exec.id, None).await?;
 
-    // Task to read stderr from the LSP server
-    tokio::spawn(async move {
-        let mut stderr_buf = Vec::new();
-        match lsp_stderr_raw.read_to_end(&mut stderr_buf).await {
-            Ok(_) => {
-                let stderr_str = String::from_utf8_lossy(&stderr_buf);
-                if !stderr_str.is_empty() {
-                    error!("LSP server STDERR: {}", stderr_str);
-                }
-            }
-            Err(e) => {
-                error!("Error reading LSP server stderr: {}", e);
-            }
+    match stream {
+        StartExecResults::Attached { output, input } => {
+            let config = ProxyConfig { timeout: 10 };
+
+            let output_adapter = DockerStreamReader::new(output);
+
+            if let Err(e) =
+                forward_proxy(BufWriter::new(input), BufReader::new(output_adapter), config).await
+            {
+                error!("Connection error {e}");
+            };
+
+            Ok(())
         }
-    });
-
-    let (stdio, stdout) = lsp_stdio(child).await?;
-
-    if let Err(e) = forward_proxy(stdio, stdout).await {
-        error!("Connection error {e}");
+        StartExecResults::Detached => Ok(()),
     }
-
-    Ok(())
 }

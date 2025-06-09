@@ -1,6 +1,7 @@
 use bollard::container::LogOutput;
 use bollard::errors::Error as BollardError;
 use futures_core::stream::Stream;
+use std::io::ErrorKind;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{error::Error, fmt::Display};
@@ -110,10 +111,7 @@ impl AsyncRead for DockerStreamReader {
 
                 Poll::Ready(Ok(()))
             }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            ))),
+            Poll::Ready(Some(Err(e))) => Poll::Ready(Err(std::io::Error::new(ErrorKind::Other, e.to_string()))),
             Poll::Ready(None) => Poll::Ready(Ok(())),
             Poll::Pending => Poll::Pending,
         }

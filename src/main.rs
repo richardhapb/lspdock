@@ -25,36 +25,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer().with_writer(file))
         .init();
 
-    let main_span = span!(Level::TRACE, "LSPROXY");
+    let main_span = span!(Level::DEBUG, "LSPROXY");
     let _guard = main_span.enter();
+
+    // TODO: Read this from a file, env or CLI
+    let config = ProxyConfig {
+        timeout: 10,
+        container: "debug-web-1".into(),
+        cmd: vec!["pyright-langserver".into(), "--stdio".into()],
+    };
 
     trace!("Initializing LSP");
 
-    let config = CreateExecOptions {
-        cmd: Some(vec!["pyright-langserver", "--stdio"]),
+    let exec_config = CreateExecOptions {
+        cmd: Some(config.cmd.clone()),
         attach_stdin: Some(true),
         attach_stdout: Some(true),
+        attach_stderr: Some(true),
+        working_dir: Some("/usr/src/app".into()),
         ..Default::default()
     };
 
-    let docker = Docker::connect_with_unix_defaults().unwrap();
-    let exec = docker.create_exec("debug-web-1", config).await?;
+    trace!(%config.container, ?config.cmd, "Connecting to docker container");
+    let docker = Docker::connect_with_socket_defaults().expect("Error connecting to docker");
+    let exec = docker.create_exec(&config.container, exec_config).await?;
     let stream = docker.start_exec(&exec.id, None).await?;
+    trace!(%config.container, "Connected sucessfully");
 
     match stream {
         StartExecResults::Attached { output, input } => {
-            let config = ProxyConfig { timeout: 10 };
-
-            let output_adapter = DockerStreamReader::new(output);
+            let output_reader = DockerStreamReader::new(output);
+            trace!("Attached to stdout/stdin");
 
             if let Err(e) =
-                forward_proxy(BufWriter::new(input), BufReader::new(output_adapter), config).await
+                forward_proxy(BufWriter::new(input), BufReader::new(output_reader), config).await
             {
                 error!("Connection error {e}");
             };
 
             Ok(())
         }
-        StartExecResults::Detached => Ok(()),
+        StartExecResults::Detached => {
+            error!("Docker not attached");
+            Err("Cannot attach to Docker")?
+        }
     }
 }

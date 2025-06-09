@@ -50,8 +50,8 @@ where
                             handle_ide_message(msg, &mut lsp_stdin).await?;
                         }
                         Ok(None) => {
-                            tokio::time::sleep(Duration::from_millis(20)).await;
-                            trace!("Empty request, connection closed");
+                            tokio::time::sleep(Duration::from_millis(30)).await;
+                            debug!("Empty request, connection closed");
                             break;
                         }
                         Err(e) => {
@@ -84,9 +84,9 @@ where
                             handle_server_message(msg, &mut stdout).await?;
                         }
                         Ok(None) => {
-                            tokio::time::sleep(Duration::from_millis(20)).await;
-                            trace!("Empty response, connection closed");
-                            break;
+                            tokio::time::sleep(Duration::from_millis(30)).await;
+                            trace!("Empty response received, trying to reconnect");
+                            continue;
                         }
                         Err(_) => {
                             tokio::time::sleep(Duration::from_millis(10)).await;

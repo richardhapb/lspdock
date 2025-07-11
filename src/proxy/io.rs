@@ -2,8 +2,8 @@ use std::error::Error;
 use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
 
-use crate::lsp::parser::{direct_forwarding, read_message, redirect_uri, send_message};
-use crate::lsp::types::{LspMessage, MessageError, Pair};
+use crate::lsp::parser::{direct_forwarding, read_message, send_message};
+use crate::lsp::types::Pair;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tracing::{Level, debug, error, info, span, trace};
 
@@ -12,8 +12,8 @@ use super::config::ProxyConfig;
 pub async fn forward_proxy<W, R>(
     mut lsp_stdin: BufWriter<W>,
     mut lsp_stdout: BufReader<R>,
-    _config: ProxyConfig,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> 
+    config: ProxyConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     W: AsyncWrite + Unpin + Send + 'static,
     R: AsyncRead + Unpin + Send + 'static,
@@ -34,6 +34,7 @@ where
 
     // IDE -> SERVER
     let ide_cancel = cancel.clone();
+    let client_config = config.clone();
     let ide_to_server = tokio::spawn(async move {
         let span = span!(Level::DEBUG, "IDE to Server");
         let _guard = span.enter();
@@ -44,7 +45,7 @@ where
                     break;
                 }
 
-                message = read_message(&mut stdin) => {
+                message = read_message(&mut stdin, Pair::Client, &client_config) => {
                     match message {
                         Ok(Some(msg)) => {
                             handle_ide_message(msg, &mut lsp_stdin).await?;
@@ -78,14 +79,14 @@ where
                     break;
                 },
 
-                message =  read_message(&mut lsp_stdout) => {
+                message =  read_message(&mut lsp_stdout, Pair::Server, &config) => {
                     match message {
                         Ok(Some(msg)) => {
                             handle_server_message(msg, &mut stdout).await?;
                         }
                         Ok(None) => {
                             tokio::time::sleep(Duration::from_millis(30)).await;
-                            trace!("Empty response received, trying to reconnect");
+                            trace!("Empty response received");
                             continue;
                         }
                         Err(_) => {
@@ -130,7 +131,7 @@ where
 }
 
 async fn handle_ide_message(
-    msg: LspMessage,
+    msg: String,
     writer: &mut BufWriter<impl AsyncWriteExt + Unpin>,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     let span = span!(parent: None, Level::DEBUG, "ClientHandler");
@@ -138,22 +139,16 @@ async fn handle_ide_message(
 
     debug!("Incoming message from IDE");
 
-    let from = Pair::Client;
-    let to = Pair::Server;
-
-    match msg {
-        req @ LspMessage::Request { .. } => handle_request(req, writer, &from, &to).await?,
-        req @ LspMessage::Notification { .. } => {
-            handle_notification(req, writer, &from, &to).await?
-        }
-        req @ LspMessage::Response { .. } => handle_response(req, writer, &from, &to).await?,
-    };
+    send_message(writer, msg).await.map_err(|e| {
+        error!("Failed to forward the request to IDE: {}", e);
+        e
+    })?;
 
     Ok(())
 }
 
 async fn handle_server_message(
-    msg: LspMessage,
+    msg: String,
     writer: &mut BufWriter<impl AsyncWriteExt + Unpin>,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     let span = span!(parent: None, Level::DEBUG, "ServerHandler");
@@ -161,16 +156,10 @@ async fn handle_server_message(
 
     debug!("Incoming message from LSP");
 
-    let from = Pair::Server;
-    let to = Pair::Client;
-
-    match msg {
-        req @ LspMessage::Request { .. } => handle_request(req, writer, &from, &to).await?,
-        req @ LspMessage::Notification { .. } => {
-            handle_notification(req, writer, &from, &to).await?
-        }
-        req @ LspMessage::Response { .. } => handle_response(req, writer, &from, &to).await?,
-    };
+    send_message(writer, msg).await.map_err(|e| {
+        error!("Failed to forward the request to LSP server: {}", e);
+        e
+    })?;
 
     Ok(())
 }
@@ -199,136 +188,3 @@ async fn shutdown_signal() -> Result<(), tokio::io::Error> {
     Ok(())
 }
 
-async fn handle_request(
-    message: LspMessage,
-    writer: &mut BufWriter<impl AsyncWriteExt + Unpin>,
-    from: &Pair,
-    to: &Pair,
-) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-    let span = span!(Level::DEBUG, "Request");
-    let _guard = span.enter();
-
-    match message {
-        LspMessage::Request {
-            jsonrpc,
-            id,
-            method,
-            params,
-        } => {
-            info!(%id, %method, "Received request");
-            let params = match redirect_uri(params, from, to) {
-                Ok(p) => p,
-                Err(e) => {
-                    error!("URI redirection error: {}", e);
-                    return Err(e.into());
-                }
-            };
-
-            trace!("Forwarded params: {:?}", params);
-            send_message(
-                writer,
-                LspMessage::Request {
-                    jsonrpc,
-                    id,
-                    method,
-                    params,
-                },
-            )
-            .await
-            .map_err(|e| {
-                error!("Failed to forward the request to LSP server: {}", e);
-                e
-            })?;
-        }
-        _ => return MessageError::err(),
-    }
-
-    Ok(())
-}
-
-async fn handle_notification(
-    message: LspMessage,
-    writer: &mut BufWriter<impl AsyncWriteExt + Unpin>,
-    from: &Pair,
-    to: &Pair,
-) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-    let span = span!(Level::DEBUG, "Notification");
-    let _guard = span.enter();
-
-    match message {
-        LspMessage::Notification {
-            jsonrpc,
-            method,
-            mut params,
-        } => {
-            info!(%method, "Received notification");
-
-            params = redirect_uri(params, from, to)?;
-            trace!("Forwarded params: {:?}", params);
-            if let Err(e) = send_message(
-                writer,
-                LspMessage::Notification {
-                    jsonrpc,
-                    method,
-                    params,
-                },
-            )
-            .await
-            {
-                error!("Failed to forward the response to IDE: {}", e);
-                return Err(e);
-            }
-        }
-
-        _ => return MessageError::err(),
-    }
-
-    Ok(())
-}
-
-async fn handle_response(
-    message: LspMessage,
-    writer: &mut BufWriter<impl AsyncWriteExt + Unpin>,
-    from: &Pair,
-    to: &Pair,
-) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-    let span = span!(Level::DEBUG, "Response");
-    let _guard = span.enter();
-
-    match message {
-        LspMessage::Response {
-            jsonrpc,
-            id,
-            mut result,
-            error,
-        } => {
-            info!(%id, "Received response");
-            if matches!(from, Pair::Client) {
-                debug!(?result, "Response");
-            }
-
-            result = result.and_then(|r| match redirect_uri(r, from, to) {
-                Ok(value) => Some(value),
-                _ => None,
-            });
-            trace!("Forwarded result: {:?}", result);
-            if let Err(e) = send_message(
-                writer,
-                LspMessage::Response {
-                    jsonrpc,
-                    id,
-                    result,
-                    error,
-                },
-            )
-            .await
-            {
-                error!("Failed to forward the response to IDE: {}", e);
-                return Err(e);
-            }
-        }
-        _ => return MessageError::err(),
-    }
-
-    Ok(())
-}

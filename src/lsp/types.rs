@@ -31,6 +31,7 @@ pub enum LspMessage {
     },
 }
 
+#[derive(Debug)]
 pub enum Pair {
     Server,
     Client,

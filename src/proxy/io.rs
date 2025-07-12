@@ -2,23 +2,28 @@ use std::error::Error;
 use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
 
-use crate::lsp::parser::{direct_forwarding, read_message, send_message};
-use crate::lsp::types::Pair;
+use crate::lsp::parser::{LspFramedReader, redirect_uri, send_message};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tracing::{Level, debug, error, info, span, trace};
 
 use super::config::ProxyConfig;
 
+#[derive(Debug)]
+pub enum Pair {
+    Server,
+    Client,
+}
+
 pub async fn forward_proxy<W, R>(
     mut lsp_stdin: BufWriter<W>,
-    mut lsp_stdout: BufReader<R>,
+    lsp_stdout: BufReader<R>,
     config: ProxyConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     W: AsyncWrite + Unpin + Send + 'static,
     R: AsyncRead + Unpin + Send + 'static,
 {
-    let mut stdin = tokio::io::BufReader::new(tokio::io::stdin());
+    let stdin = tokio::io::BufReader::new(tokio::io::stdin());
     let mut stdout = tokio::io::BufWriter::new(tokio::io::stdout());
 
     let cancel = tokio_util::sync::CancellationToken::new();
@@ -38,16 +43,18 @@ where
     let ide_to_server = tokio::spawn(async move {
         let span = span!(Level::DEBUG, "IDE to Server");
         let _guard = span.enter();
+        let mut reader = LspFramedReader::new(stdin);
         loop {
             tokio::select! {
-                _ = ide_cancel.cancelled() => {
-                    info!("IDE->SERVER task cancelled");
-                    break;
-                }
+            _ = ide_cancel.cancelled() => {
+                info!("IDE->SERVER task cancelled");
+                break;
+            }
 
-                message = read_message(&mut stdin, Pair::Client, &client_config) => {
+                message = reader.read_message() => {
                     match message {
-                        Ok(Some(msg)) => {
+                        Ok(Some(mut msg)) => {
+                            redirect_uri(&mut msg, &Pair::Client, &client_config)?;
                             handle_ide_message(msg, &mut lsp_stdin).await?;
                         }
                         Ok(None) => {
@@ -72,6 +79,7 @@ where
     let server_to_ide = tokio::spawn(async move {
         let span = span!(Level::DEBUG, "Server to IDE");
         let _guard = span.enter();
+        let mut reader = LspFramedReader::new(lsp_stdout);
         loop {
             tokio::select! {
                 _ = lsp_cancel.cancelled() => {
@@ -79,9 +87,10 @@ where
                     break;
                 },
 
-                message =  read_message(&mut lsp_stdout, Pair::Server, &config) => {
+                    message =  reader.read_message() => {
                     match message {
-                        Ok(Some(msg)) => {
+                        Ok(Some(mut msg)) => {
+                            redirect_uri(&mut msg, &Pair::Server, &config)?;
                             handle_server_message(msg, &mut stdout).await?;
                         }
                         Ok(None) => {
@@ -91,11 +100,7 @@ where
                         }
                         Err(_) => {
                             tokio::time::sleep(Duration::from_millis(10)).await;
-                            error!("Unrecognized Lsp Response, forwarding direclty");
-                            if let Err(e) = direct_forwarding(&mut lsp_stdout, &mut stdout).await {
-                                error!("Failed to forward response to IDE: {}", e);
-                                return Err(e);
-                            }
+                            error!("Unrecognized Lsp Response");
                         }
                     }
                 }
@@ -112,11 +117,11 @@ where
             info!("IDE->SERVER task completed");
             r?
         },
-        r = server_to_ide => {
-            info!("SERVER->IDE task completed");
-            r?
-        },
-        r = signal_task => {
+            r = server_to_ide => {
+                info!("SERVER->IDE task completed");
+                r?
+            },
+            r = signal_task => {
             info!("Signal handler task completed");
             r?
         },
@@ -187,4 +192,3 @@ async fn shutdown_signal() -> Result<(), tokio::io::Error> {
     debug!("Shutdown signal received");
     Ok(())
 }
-

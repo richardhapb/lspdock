@@ -1,93 +1,170 @@
-use std::collections::HashMap;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
+use crate::proxy::{config::ProxyConfig, io::Pair};
+use std::error::Error;
+use std::str;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+use tracing::{debug, error, trace};
 
-use tracing::{info, trace, debug};
-
-use crate::proxy::config::ProxyConfig;
-
-use super::types::Pair;
-
-pub(crate) async fn read_message(
-    reader: &mut BufReader<impl AsyncReadExt + Unpin>,
-    pair: Pair,
-    config: &ProxyConfig,
-) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
-    let mut headers = HashMap::new();
-    let mut content_length: Option<usize> = None;
-
-    loop {
-        let mut line = String::new();
-        let bytes_read = reader.read_line(&mut line).await?;
-
-        trace!(%bytes_read, "Read line");
-
-        if bytes_read == 0 {
-            trace!(%bytes_read, "Breaking");
-            break;
-        }
-
-        let trimmed = line.trim();
-        trace!(%trimmed, "Reading line");
-
-        if trimmed.is_empty() && content_length.is_some() {
-            trace!("Empty line detected");
-            break; // End of headers
-        }
-
-        if let Some((key, value)) = trimmed.split_once(":") {
-            let key = key.trim();
-            let value = value.trim();
-
-            trace!(%key, %value, "Header");
-
-            headers.insert(key.to_lowercase(), value.to_lowercase());
-
-            if key.eq_ignore_ascii_case("content-length")
-                || key.eq_ignore_ascii_case("ontent-length")
-            {
-                content_length = Some(value.parse()?);
-            }
-        }
-    }
-
-    if content_length.is_none() {
-        trace!("Content-Length header not found, returning None");
-        return Ok(None);
-    }
-
-    let length = content_length.ok_or("Content-Length header not found")?;
-    info!("Content-Length: {}", length);
-
-    let mut buf = vec![0; length];
-
-    reader.read_exact(&mut buf).await?;
-    let mut raw_str = String::from_utf8_lossy(&buf).to_string();
-
-    trace!(?pair, "RAW: {raw_str}");
-
-    match pair {
-        Pair::Server => redirect_uri(&mut raw_str, &pair, config)?,
-        Pair::Client => redirect_uri(&mut raw_str, &pair, config)?,
-    };
-
-    trace!("REDIRECTED: {raw_str}");
-
-    Ok(Some(raw_str))
+pub struct LspFramedReader<R> {
+    reader: BufReader<R>,
 }
 
+impl<R: AsyncRead + Unpin> LspFramedReader<R> {
+    pub fn new(inner: R) -> Self {
+        Self {
+            reader: BufReader::new(inner),
+        }
+    }
+
+    pub async fn read_message(&mut self) -> Result<Option<String>, Box<dyn Error + Send + Sync>> {
+        let content_length = match self.read_headers().await {
+            Ok(len) => len,
+            Err(e) => {
+                error!("Error reading headers: {}", e);
+                return Err(e);
+            }
+        };
+
+        if content_length == 0 {
+            return Ok(None);
+        }
+
+        trace!(content_length, "Reading body");
+
+        let mut buf = vec![0u8; content_length];
+        match self.reader.read_exact(&mut buf).await {
+            Ok(_) => {}
+            Err(e) => {
+                error!("Error reading message body: {}", e);
+                return Err(e.into());
+            }
+        }
+
+        let body = String::from_utf8(buf)?;
+        Ok(Some(body))
+    }
+
+    async fn read_headers(&mut self) -> Result<usize, Box<dyn Error + Send + Sync>> {
+        let mut headers_buf = Vec::new();
+        let mut temp_buf = [0u8; 1];
+
+        // Read until we find \r\n\r\n
+        loop {
+            match self.reader.read_exact(&mut temp_buf).await {
+                Ok(_) => {
+                    headers_buf.push(temp_buf[0]);
+
+                    // Check if we've reached the end of headers (\r\n\r\n)
+                    if headers_buf.len() >= 4 {
+                        let len = headers_buf.len();
+                        if headers_buf[len - 4..] == [b'\r', b'\n', b'\r', b'\n'] {
+                            break;
+                        }
+                    }
+
+                    // Safety check
+                    if headers_buf.len() > 8192 {
+                        return Err("Headers too large".into());
+                    }
+                }
+                Err(e) => {
+                    error!(
+                        "Error reading header byte at position {}: {}",
+                        headers_buf.len(),
+                        e
+                    );
+                    return Err(e.into());
+                }
+            }
+        }
+
+        trace!("Raw header bytes: {:?}", headers_buf);
+
+        let headers_str = match String::from_utf8(headers_buf.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Invalid UTF-8 in headers. Raw bytes: {:?}", headers_buf);
+                return Err(format!("Invalid UTF-8 in headers: {}", e).into());
+            }
+        };
+
+        trace!(%headers_str, "Raw headers");
+
+        let mut content_length = None;
+
+        for line in headers_str.split("\r\n") {
+            if line.is_empty() {
+                continue;
+            }
+
+            trace!("Processing header line: '{}'", line);
+
+            // Try to find Content-Length header, being case-insensitive
+            if let Some(colon_pos) = line.find(':') {
+                let key = line[..colon_pos].trim();
+                let value = line[colon_pos + 1..].trim();
+
+                trace!("Header key: '{}', value: '{}'", key, value);
+
+                // Check for Content-Length with case-insensitive matching and handle truncated headers
+                if key.eq_ignore_ascii_case("content-length") {
+                    match value.parse::<usize>() {
+                        Ok(len) => {
+                            content_length = Some(len);
+                            break;
+                        }
+                        Err(e) => {
+                            error!("Failed to parse Content-Length '{}': {}", value, e);
+                            return Err(format!("Invalid Content-Length: {}", value).into());
+                        }
+                    }
+                }
+                // Handle the case where the first character is missing (common bug)
+                else if key.eq_ignore_ascii_case("ontent-length") {
+                    trace!(
+                        "Found truncated Content-Length header (missing 'C'), treating as Content-Length"
+                    );
+                    match value.parse::<usize>() {
+                        Ok(len) => {
+                            content_length = Some(len);
+                            break;
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to parse truncated Content-Length '{}': {}",
+                                value, e
+                            );
+                            return Err(format!("Invalid Content-Length: {}", value).into());
+                        }
+                    }
+                }
+            } else {
+                debug!("Header line without colon: '{}'", line);
+
+                // Check if this might be a truncated Content-Length header
+                if line.to_lowercase().contains("ontent-length") {
+                    error!("Found truncated Content-Length header: '{}'", line);
+                    error!("This suggests a bug in the reading logic - missing first character");
+                }
+            }
+        }
+
+        content_length.ok_or_else(|| "Missing Content-Length header".into())
+    }
+}
 pub(crate) async fn send_message(
     writer: &mut tokio::io::BufWriter<impl tokio::io::AsyncWriteExt + Unpin>,
     message: String,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let len = message.len();
+    let len = message.as_bytes().len();
     debug!(%len, "Sending message");
-    let msg = format!("Content-Length: {}\r\n\r\n{}", len, message);
+    let msg = format!("Content-Length: {len}\r\n\r\n{message}");
 
     writer.write_all(msg.as_bytes()).await?;
     writer.flush().await?;
 
     Ok(())
 }
+
 pub(crate) fn redirect_uri(
     raw_str: &mut String,
     from: &Pair,
@@ -110,18 +187,6 @@ pub(crate) fn redirect_uri(
     trace!(%from_path_str, %to_path_str);
 
     *raw_str = raw_str.replace(from_path_str, to_path_str);
-
-    Ok(())
-}
-
-pub(crate) async fn direct_forwarding(
-    reader: &mut BufReader<impl AsyncReadExt + Unpin>,
-    writer: &mut BufWriter<impl AsyncWriteExt + Unpin>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).await?;
-    writer.write_all(&buf).await?;
-    writer.flush().await?;
 
     Ok(())
 }

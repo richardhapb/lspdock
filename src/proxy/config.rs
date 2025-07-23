@@ -1,4 +1,4 @@
-use std::{error::Error, fmt::Display};
+use std::{error::Error, fmt::Display, path::PathBuf};
 
 use serde::Deserialize;
 
@@ -41,7 +41,7 @@ pub struct ProxyConfig {
 }
 
 impl ProxyConfig {
-    pub fn from_file(path: &str) -> Result<Self, ConfigParseError> {
+    pub fn from_file(path: &PathBuf) -> Result<Self, ConfigParseError> {
         let file_str = std::fs::read_to_string(path)?;
 
         Ok(toml::from_str(&file_str)?)

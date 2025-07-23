@@ -1,6 +1,6 @@
-use std::process::Stdio;
+use std::{path::PathBuf, process::Stdio};
 use tokio::process::Command;
-use tracing::{Level, debug, error, info, span};
+use tracing::{debug, error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod lsp;
 mod proxy;
@@ -22,10 +22,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer().with_writer(file))
         .init();
 
-    let main_span = span!(Level::DEBUG, "LSPROXY");
-    let _guard = main_span.enter();
-
-    let config = ProxyConfig::from_file("lsproxy.toml").map_err(|e| {
+    let home = dirs::home_dir().unwrap_or(PathBuf::new());
+    let config_path = home.join(".config").join("lsproxy").join("lsproxy.toml");
+    let config = ProxyConfig::from_file(&config_path).map_err(|e| {
         error!("Error retrieving config: {e}");
         e
     })?;

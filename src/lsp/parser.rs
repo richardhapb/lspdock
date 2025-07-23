@@ -1,4 +1,4 @@
-use crate::proxy::{Pair, config::ProxyConfig};
+use crate::{config::ProxyConfig, proxy::Pair};
 use std::error::Error;
 use std::str;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -88,7 +88,7 @@ impl<R: AsyncRead + Unpin> LspFramedReader<R> {
             }
         };
 
-        trace!(%headers_str, "Raw headers");
+        trace!(headers_str = %headers_str.trim(), "Raw headers");
 
         let mut content_length = None;
 

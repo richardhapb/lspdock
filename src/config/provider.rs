@@ -1,6 +1,8 @@
-use std::{error::Error, fmt::Display, path::PathBuf};
+use std::{env::current_dir, error::Error, fmt::Display, path::PathBuf};
 
 use serde::Deserialize;
+
+use crate::config::variables::{VariableCwd, VariableParent, VariableResolver};
 
 #[derive(Debug)]
 pub enum ConfigParseError {
@@ -38,12 +40,27 @@ pub struct ProxyConfig {
     pub local_path: String,
     pub docker_internal_path: String,
     pub executable: String,
+    /// This serves as a pattern for the proxy to Docker; if the pattern doesn't match, the proxy will
+    /// forward requests directly to the local LSP.
+    pub pattern: String,
+    #[serde(skip)]
+    pub use_docker: bool,
 }
 
 impl ProxyConfig {
     pub fn from_file(path: &PathBuf) -> Result<Self, ConfigParseError> {
         let file_str = std::fs::read_to_string(path)?;
+        let mut config = toml::from_str(&file_str)?;
 
-        Ok(toml::from_str(&file_str)?)
+        let cwd_var = VariableCwd::default();
+        let parent_var = VariableParent::default();
+        cwd_var.expand(&mut config).unwrap();
+        parent_var.expand(&mut config).unwrap();
+
+        let cwd = current_dir()?;
+        let cwd = cwd.to_str().expect("get current dir");
+        config.use_docker = cwd.contains(&config.pattern);
+
+        Ok(config)
     }
 }

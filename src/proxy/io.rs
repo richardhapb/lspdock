@@ -7,7 +7,7 @@ use crate::lsp::parser::{
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, BufReader, BufWriter};
 use tracing::{Instrument, Level, debug, error, info, span, trace};
 
-use super::config::ProxyConfig;
+use crate::config::ProxyConfig;
 
 #[derive(Debug)]
 pub enum Pair {
@@ -68,7 +68,9 @@ where
                                     }
                                 }
 
-                                redirect_uri(&mut msg, &Pair::Client, &client_config)?;
+                                if client_config.use_docker {
+                                    redirect_uri(&mut msg, &Pair::Client, &client_config)?;
+                                }
                                 send_message(&mut lsp_stdin, msg).await.map_err(|e| {
                                     error!("Failed to forward the request to IDE: {}", e);
                                     e
@@ -110,7 +112,9 @@ where
                         match message {
                             Ok(Some(mut msg)) => {
                                 debug!("Incoming message from LSP");
-                                redirect_uri(&mut msg, &Pair::Server, &config)?;
+                                if config.use_docker {
+                                    redirect_uri(&mut msg, &Pair::Server, &config)?;
+                                }
                                 send_message(&mut stdout, msg).await.map_err(|e| {
                                     error!("Failed to forward the request to LSP: {}", e);
                                     e

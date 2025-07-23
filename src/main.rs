@@ -2,12 +2,14 @@ use std::{path::PathBuf, process::Stdio};
 use tokio::process::Command;
 use tracing::{debug, error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+mod config;
 mod lsp;
 mod proxy;
 
 use tokio::io::{BufReader, BufWriter};
 
-use proxy::{config::ProxyConfig, forward_proxy};
+use config::ProxyConfig;
+use proxy::forward_proxy;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -32,25 +34,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     debug!(?config, "configuration file");
 
     let args = std::env::args();
-    let mut cmd = vec![
-        "exec".into(),
-        "-i".into(),
-        "--workdir".into(),
-        config.docker_internal_path.clone(),
-        config.container.clone(),
-        config.executable.clone(),
-    ];
 
+    // Call docker only if the pattern matches.
+    let (cmd, mut cmd_args) = if config.use_docker {
+        let cmd = vec![
+            "exec".into(),
+            "-i".into(),
+            "--workdir".into(),
+            config.docker_internal_path.clone(),
+            config.container.clone(),
+            config.executable.clone(),
+        ];
+        ("docker".into(), cmd)
+    } else {
+        (config.executable.clone(), vec![])
+    };
+
+    debug!(%config.container, ?cmd_args, "Connecting to LSP");
     debug!(?args, "args received");
-    cmd.extend(args.skip(1));
-    debug!(?cmd, "full command");
+    cmd_args.extend(args.skip(1));
+    debug!(?cmd_args, "full command");
 
     info!("Initializing LSP");
 
-    debug!(%config.container, ?cmd, "Connecting to docker container");
-
-    let mut child = Command::new("docker")
-        .args(cmd)
+    let mut child = Command::new(&cmd)
+        .args(cmd_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -60,7 +68,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stdout = BufReader::new(child.stdout.take().unwrap());
     let stdin = BufWriter::new(child.stdin.take().unwrap());
 
-    info!(%config.container, "Attached to stdout/stdin");
+    if config.use_docker {
+        info!(%config.container, "Attached to stdout/stdin");
+    } else {
+        info!(%config.executable, "Attached to stdout/stdin");
+    }
 
     if let Err(e) = forward_proxy(stdin, stdout, config).await {
         error!("Connection error {e}");

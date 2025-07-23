@@ -1,9 +1,10 @@
-use std::error::Error;
 use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
 
-use crate::lsp::parser::{LspFramedReader, redirect_uri, send_message};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
+use crate::lsp::parser::{
+    LspFramedReader, patch_initialize_process_id, redirect_uri, send_message,
+};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite,BufReader, BufWriter};
 use tracing::{Level, debug, error, info, span, trace};
 
 use super::config::ProxyConfig;
@@ -14,6 +15,7 @@ pub enum Pair {
     Client,
 }
 
+/// Main handler for forwarding and transforming messages between IDE and LSP
 pub async fn forward_proxy<W, R>(
     mut lsp_stdin: BufWriter<W>,
     lsp_stdout: BufReader<R>,
@@ -44,6 +46,7 @@ where
         let span = span!(Level::DEBUG, "IDE to Server");
         let _guard = span.enter();
         let mut reader = LspFramedReader::new(stdin);
+        let mut initialized = false;
         loop {
             tokio::select! {
             _ = ide_cancel.cancelled() => {
@@ -52,10 +55,24 @@ where
             }
 
                 message = reader.read_message() => {
+                    debug!("Read message from IDE");
                     match message {
                         Ok(Some(mut msg)) => {
+
+                            debug!("Incoming message from IDE");
+                            if !initialized {
+                                trace!("Trying to patch initialize method");
+                                initialized = patch_initialize_process_id(&mut msg);
+                                if !initialized {
+                                    trace!("Initialize method not found, skipping patch");
+                                }
+                            }
+
                             redirect_uri(&mut msg, &Pair::Client, &client_config)?;
-                            handle_ide_message(msg, &mut lsp_stdin).await?;
+                            send_message(&mut lsp_stdin, msg).await.map_err(|e| {
+                                error!("Failed to forward the request to IDE: {}", e);
+                                e
+                            })?;
                         }
                         Ok(None) => {
                             tokio::time::sleep(Duration::from_millis(30)).await;
@@ -86,12 +103,16 @@ where
                     info!("SERVER->IDE task cancelled");
                     break;
                 },
-
                     message =  reader.read_message() => {
+                    debug!("Read message from LSP");
                     match message {
                         Ok(Some(mut msg)) => {
+                            debug!("Incoming message from LSP");
                             redirect_uri(&mut msg, &Pair::Server, &config)?;
-                            handle_server_message(msg, &mut stdout).await?;
+                            send_message(&mut stdout, msg).await.map_err(|e| {
+                                error!("Failed to forward the request to LSP: {}", e);
+                                e
+                            })?;
                         }
                         Ok(None) => {
                             tokio::time::sleep(Duration::from_millis(30)).await;
@@ -135,40 +156,7 @@ where
     result
 }
 
-async fn handle_ide_message(
-    msg: String,
-    writer: &mut BufWriter<impl AsyncWriteExt + Unpin>,
-) -> Result<(), Box<dyn Error + Sync + Send>> {
-    let span = span!(parent: None, Level::DEBUG, "ClientHandler");
-    let _guard = span.enter();
-
-    debug!("Incoming message from IDE");
-
-    send_message(writer, msg).await.map_err(|e| {
-        error!("Failed to forward the request to IDE: {}", e);
-        e
-    })?;
-
-    Ok(())
-}
-
-async fn handle_server_message(
-    msg: String,
-    writer: &mut BufWriter<impl AsyncWriteExt + Unpin>,
-) -> Result<(), Box<dyn Error + Sync + Send>> {
-    let span = span!(parent: None, Level::DEBUG, "ServerHandler");
-    let _guard = span.enter();
-
-    debug!("Incoming message from LSP");
-
-    send_message(writer, msg).await.map_err(|e| {
-        error!("Failed to forward the request to LSP server: {}", e);
-        e
-    })?;
-
-    Ok(())
-}
-
+/// Handles the shutdown signal from the IDE
 async fn shutdown_signal() -> Result<(), tokio::io::Error> {
     // Create signal streams
     let mut term = signal(SignalKind::terminate())?;
@@ -178,15 +166,15 @@ async fn shutdown_signal() -> Result<(), tokio::io::Error> {
     // Wait for any signal
     tokio::select! {
         _ = term.recv() => info!("SIGTERM received"),
-        _ = int.recv() => info!("SIGINT received"),
-        _ = hup.recv() => info!("SIGHUP received"),
-        _ = async {
-            let mut buf = [0u8; 1];
-            match tokio::io::stdin().read(&mut buf).await {
-                Ok(0) | Err(_) => (), // EOF or error, either is fine
-                _ => tokio::time::sleep(Duration::from_secs(3600*24*365)).await, // Wait forever if data received
-            }
-        } => info!("Stdin closed"),
+            _ = int.recv() => info!("SIGINT received"),
+            _ = hup.recv() => info!("SIGHUP received"),
+            _ = async {
+                let mut buf = [0u8; 1];
+                match tokio::io::stdin().read(&mut buf).await {
+                    Ok(0) | Err(_) => (), // EOF or error, either is fine
+                    _ => tokio::time::sleep(Duration::from_secs(3600*24*365)).await, // Wait forever if data received
+                }
+            } => info!("Stdin closed"),
     }
 
     debug!("Shutdown signal received");

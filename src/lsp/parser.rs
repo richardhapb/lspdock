@@ -1,4 +1,4 @@
-use crate::proxy::{config::ProxyConfig, io::Pair};
+use crate::proxy::{Pair, config::ProxyConfig};
 use std::error::Error;
 use std::str;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -15,6 +15,7 @@ impl<R: AsyncRead + Unpin> LspFramedReader<R> {
         }
     }
 
+    /// Read a message from the sender and capture the content
     pub async fn read_message(&mut self) -> Result<Option<String>, Box<dyn Error + Send + Sync>> {
         let content_length = match self.read_headers().await {
             Ok(len) => len,
@@ -40,9 +41,11 @@ impl<R: AsyncRead + Unpin> LspFramedReader<R> {
         }
 
         let body = String::from_utf8(buf)?;
+        trace!(%body);
         Ok(Some(body))
     }
 
+    /// Read the headers and content-length to read the body accordingly later.
     async fn read_headers(&mut self) -> Result<usize, Box<dyn Error + Send + Sync>> {
         let mut headers_buf = Vec::new();
         let mut temp_buf = [0u8; 1];
@@ -76,8 +79,6 @@ impl<R: AsyncRead + Unpin> LspFramedReader<R> {
                 }
             }
         }
-
-        trace!("Raw header bytes: {:?}", headers_buf);
 
         let headers_str = match String::from_utf8(headers_buf.clone()) {
             Ok(s) => s,
@@ -118,7 +119,9 @@ impl<R: AsyncRead + Unpin> LspFramedReader<R> {
                         }
                     }
                 }
-                // Handle the case where the first character is missing (common bug)
+                // Handle the case where the first character is missing (common bug).
+                // This bug occurs in Pyright because it provides an incorrect content-length
+                // in the first message, this behavior needs research because there may be a reason for it.
                 else if key.eq_ignore_ascii_case("ontent-length") {
                     trace!(
                         "Found truncated Content-Length header (missing 'C'), treating as Content-Length"
@@ -151,12 +154,15 @@ impl<R: AsyncRead + Unpin> LspFramedReader<R> {
         content_length.ok_or_else(|| "Missing Content-Length header".into())
     }
 }
-pub(crate) async fn send_message(
+
+/// Send a message from the proxy to the destination
+pub async fn send_message(
     writer: &mut tokio::io::BufWriter<impl tokio::io::AsyncWriteExt + Unpin>,
     message: String,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let len = message.as_bytes().len();
     debug!(%len, "Sending message");
+    trace!(%message);
     let msg = format!("Content-Length: {len}\r\n\r\n{message}");
 
     writer.write_all(msg.as_bytes()).await?;
@@ -165,7 +171,9 @@ pub(crate) async fn send_message(
     Ok(())
 }
 
-pub(crate) fn redirect_uri(
+/// Redirect the paths from the sender pair to the receiver pair; this is used
+/// for matching the paths between the container and the host path.
+pub fn redirect_uri(
     raw_str: &mut String,
     from: &Pair,
     config: &ProxyConfig,
@@ -189,4 +197,23 @@ pub(crate) fn redirect_uri(
     *raw_str = raw_str.replace(from_path_str, to_path_str);
 
     Ok(())
+}
+
+/// Patch the processId parameter from the client.
+///
+/// Patching the PID is necessary because if it is passed to an LSP located inside a Docker
+/// container, the LSP will try to detect the PID, and if it is missing inside the container,
+/// the LSP will close and break the pipe.
+pub fn patch_initialize_process_id(raw_str: &mut String) -> bool {
+    if raw_str.contains(r#""method":"initialize""#) {
+        debug!("Initialize method found, patching");
+        trace!(%raw_str, "before patch");
+
+        let re = regex::Regex::new(r#""processId":\s*\d+"#).unwrap();
+        *raw_str = re.replace_all(raw_str, r#""processId":null"#).to_string();
+
+        trace!(%raw_str, "patched");
+        return true;
+    }
+    return false;
 }

@@ -7,7 +7,7 @@ mod proxy;
 
 use tokio::io::{BufReader, BufWriter};
 
-use proxy::{config::ProxyConfig, io::forward_proxy};
+use proxy::{config::ProxyConfig, forward_proxy};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

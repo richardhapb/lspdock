@@ -43,6 +43,16 @@ impl Default for VariableParent {
     }
 }
 
+/// Parent directory variable
+pub(super) struct VariableHome(Variable);
+
+impl Default for VariableHome {
+    fn default() -> Self {
+        Self(Variable::new("HOME"))
+    }
+}
+
+
 impl VariableResolver for VariableCwd {
     fn expand(self, config: &mut ProxyConfig) -> Result<(), Box<dyn std::error::Error>> {
         let var = format!("${}", self.0.name.to_uppercase());
@@ -63,7 +73,20 @@ impl VariableResolver for VariableParent {
         let parent = cwd.file_name().unwrap_or(OsStr::new(""));
         let expanded = parent
             .to_str()
-            .ok_or_else(|| "Could not convert current directory to string".to_string())?;
+            .ok_or_else(|| "Could not convert parent directory to string".to_string())?;
+        expand_into_config(config, &var, &expanded);
+
+        Ok(())
+    }
+}
+
+impl VariableResolver for VariableHome {
+    fn expand(self, config: &mut ProxyConfig) -> Result<(), Box<dyn std::error::Error>> {
+        let var = format!("${}", self.0.name.to_uppercase());
+        let home = dirs::home_dir().ok_or_else(|| "Could not retrieve home directory".to_string())?;
+        let expanded = home
+            .to_str()
+            .ok_or_else(|| "Could not convert home to string".to_string())?;
         expand_into_config(config, &var, &expanded);
 
         Ok(())
@@ -92,24 +115,29 @@ mod tests {
     fn variable_expand() {
         let par_var = VariableParent::default();
         let cwd_var = VariableCwd::default();
+        let home_var = VariableHome::default();
         let mut config = ProxyConfig {
             container: "$PARENT-web-1".into(),
             local_path: "$CWD/app".into(),
             docker_internal_path: "/some/path".into(),
-            pattern: "/some/pattern".into(),
+            pattern: "$HOME/dev".into(),
             executable: "rust_analyzer".into(),
             use_docker: false,
         };
 
         par_var.expand(&mut config).unwrap();
         cwd_var.expand(&mut config).unwrap();
+        home_var.expand(&mut config).unwrap();
 
         let cwd = current_dir().unwrap();
         let parent = cwd.file_name().unwrap();
         let parent = parent.to_str().unwrap();
         let cwd = cwd.to_str().unwrap();
+        let home = dirs::home_dir().unwrap();
+        let home = home.to_str().unwrap();
 
         assert_eq!(config.container, format!("{parent}-web-1"));
         assert_eq!(config.local_path, format!("{cwd}/app"));
+        assert_eq!(config.pattern, format!("{home}/dev"));
     }
 }

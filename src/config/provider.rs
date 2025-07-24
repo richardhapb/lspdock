@@ -2,7 +2,7 @@ use std::{env::current_dir, error::Error, fmt::Display, path::PathBuf};
 
 use serde::Deserialize;
 
-use crate::config::variables::{VariableCwd, VariableParent, VariableResolver};
+use crate::config::variables::{VariableCwd, VariableHome, VariableParent, VariableResolver};
 
 #[derive(Debug)]
 pub enum ConfigParseError {
@@ -54,8 +54,10 @@ impl ProxyConfig {
 
         let cwd_var = VariableCwd::default();
         let parent_var = VariableParent::default();
+        let home_var = VariableHome::default();
         cwd_var.expand(&mut config).unwrap();
         parent_var.expand(&mut config).unwrap();
+        home_var.expand(&mut config).unwrap();
 
         let cwd = current_dir()?;
         let cwd = cwd.to_str().expect("get current dir");

@@ -2,6 +2,31 @@
 
 LSProxy is a lightweight Language Server Protocol (LSP) proxy designed to facilitate communication between IDEs and LSP servers. It supports dynamic path redirection, Docker integration, and configuration-based customization. LSProxy ensures seamless communication between your IDE and LSP server, even when the server is running inside a Docker container.
 
+```mermaid
+flowchart TD
+    subgraph Without LSProxy
+        IDE -.->|Path mismatch| LSP
+        LSP["LSP Server (Inside Docker)"] -->|Path mismatch| IDE["IDE (Client)"]
+    end
+
+    subgraph With LSProxy
+        IDE2["IDE (Client)"] --> LSProxy["LSProxy (Proxy)"]
+        LSProxy["LSProxy (Proxy)"] -->|Path redirection| IDE2["IDE (Client)"]
+        LSP2["LSP Server (Inside Docker)"] --> LSProxy
+        LSProxy -.->|Path redirection| LSP2
+    end
+```
+
+### Explanation:
+1. **Without LSProxy**:
+   - The IDE communicates directly with the LSP server inside Docker.
+   - Path mismatches between the host and container can cause issues, breaking the communication.
+
+2. **With LSProxy**:
+   - LSProxy acts as a middle layer between the IDE and the LSP server.
+   - LSProxy dynamically redirects paths, ensuring seamless communication between the IDE and the LSP server inside Docker.
+
+
 > [!WARNING]
 > LSProxy is currently in the development process and is in Alpha state. Some features are not available yet, such as the built-in and external libraries for the 'go to definition' LSP feature, because the Python environment is inside the container. I appreciate any issues you encounter; please report them so we can fix them and make this app more reliable.
 

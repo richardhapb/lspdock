@@ -74,6 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!(%config.executable, "Attached to stdout/stdin");
     }
 
+    // Main proxy handler
     if let Err(e) = forward_proxy(stdin, stdout, config).await {
         error!("Connection error {e}");
     };

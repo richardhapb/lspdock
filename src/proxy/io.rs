@@ -128,6 +128,7 @@ where
                             Err(_) => {
                                 tokio::time::sleep(Duration::from_millis(10)).await;
                                 error!("Unrecognized Lsp Response");
+                                break;
                             }
                         }
                     }

@@ -2,7 +2,7 @@ use crate::{config::ProxyConfig, proxy::Pair};
 use std::error::Error;
 use std::str;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 pub struct LspFramedReader<R> {
     reader: BufReader<R>,
@@ -47,6 +47,10 @@ impl<R: AsyncRead + Unpin> LspFramedReader<R> {
 
     /// Read the headers and content-length to read the body accordingly later.
     async fn read_headers(&mut self) -> Result<usize, Box<dyn Error + Send + Sync>> {
+        const MAX_RETRY_SECONDS: u64 = 5;
+        let mut retry_seconds = 1;
+        let mut retry_time = std::time::Duration::from_secs(retry_seconds);
+
         let mut headers_buf = Vec::new();
         let mut temp_buf = [0u8; 1];
 
@@ -70,6 +74,21 @@ impl<R: AsyncRead + Unpin> LspFramedReader<R> {
                     }
                 }
                 Err(e) => {
+                    // If the data is empty, the pipe with the LSP is not working; make a retry.
+                    // Logic with a maximum duration in seconds for
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                        warn!("No data was read; retrying in {retry_seconds} seconds");
+                        tokio::time::sleep(retry_time).await;
+
+                        if retry_seconds == MAX_RETRY_SECONDS {
+                            break;
+                        }
+
+                        retry_seconds = (retry_seconds + 1).min(MAX_RETRY_SECONDS);
+                        retry_time = std::time::Duration::from_secs(retry_seconds);
+                        continue;
+                    }
+
                     error!(
                         "Error reading header byte at position {}: {}",
                         headers_buf.len(),

@@ -1,6 +1,4 @@
-use crate::{config::ProxyConfig, proxy::Pair};
 use std::error::Error;
-use std::str;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, error, trace, warn};
 
@@ -190,49 +188,3 @@ pub async fn send_message(
     Ok(())
 }
 
-/// Redirect the paths from the sender pair to the receiver pair; this is used
-/// for matching the paths between the container and the host path.
-pub fn redirect_uri(
-    raw_str: &mut String,
-    from: &Pair,
-    config: &ProxyConfig,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let from_path_str: &str;
-    let to_path_str: &str;
-
-    match from {
-        Pair::Client => {
-            from_path_str = &config.local_path;
-            to_path_str = &config.docker_internal_path;
-        }
-        Pair::Server => {
-            from_path_str = &config.docker_internal_path;
-            to_path_str = &config.local_path;
-        }
-    }
-
-    trace!(%from_path_str, %to_path_str);
-
-    *raw_str = raw_str.replace(from_path_str, to_path_str);
-
-    Ok(())
-}
-
-/// Patch the processId parameter from the client.
-///
-/// Patching the PID is necessary because if it is passed to an LSP located inside a Docker
-/// container, the LSP will try to detect the PID, and if it is missing inside the container,
-/// the LSP will close and break the pipe.
-pub fn patch_initialize_process_id(raw_str: &mut String) -> bool {
-    if raw_str.contains(r#""method":"initialize""#) {
-        debug!("Initialize method found, patching");
-        trace!(%raw_str, "before patch");
-
-        let re = regex::Regex::new(r#""processId":\s*\d+"#).unwrap();
-        *raw_str = re.replace_all(raw_str, r#""processId":null"#).to_string();
-
-        trace!(%raw_str, "patched");
-        return true;
-    }
-    return false;
-}

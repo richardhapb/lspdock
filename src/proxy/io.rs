@@ -1,8 +1,11 @@
 use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
+use tokio_util::sync::CancellationToken;
 
-use crate::lsp::parser::{
-    LspFramedReader, patch_initialize_process_id, redirect_uri, send_message,
+use crate::lsp::{
+    binding::redirect_uri,
+    parser::{LspFramedReader, send_message},
+    pid::patch_initialize_process_id,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, BufReader, BufWriter};
 use tracing::{Instrument, Level, debug, error, info, span, trace};
@@ -17,7 +20,7 @@ pub enum Pair {
 
 /// Main handler for forwarding and transforming messages between IDE and LSP
 pub async fn forward_proxy<W, R>(
-    mut lsp_stdin: BufWriter<W>,
+    lsp_stdin: BufWriter<W>,
     lsp_stdout: BufReader<R>,
     config: ProxyConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
@@ -26,9 +29,9 @@ where
     R: AsyncRead + Unpin + Send + 'static,
 {
     let stdin = tokio::io::BufReader::new(tokio::io::stdin());
-    let mut stdout = tokio::io::BufWriter::new(tokio::io::stdout());
+    let stdout = tokio::io::BufWriter::new(tokio::io::stdout());
 
-    let cancel = tokio_util::sync::CancellationToken::new();
+    let cancel = CancellationToken::new();
     let signal_cancel = cancel.clone();
 
     let signal_task = tokio::spawn(async move {
@@ -37,29 +40,77 @@ where
         Ok(())
     });
 
+    // The client writes to proxy stdin and proxy writes to LSP stdin
+    let ide_to_server = main_loop(Pair::Client, &cancel, &config, stdin, lsp_stdin);
+    // The LSP writes to stdout, and the proxy reads from it. The proxy also writes to its stdout
+    // and the client reads from it
+    let server_to_ide = main_loop(Pair::Server, &cancel, &config, lsp_stdout, stdout);
+
     info!("LSP Proxy: Lsp listening for incoming messages...");
 
-    // IDE -> SERVER
-    let ide_cancel = cancel.clone();
-    let client_config = config.clone();
-    let ide_span = span!(Level::DEBUG, "IDE to Server");
-    let ide_to_server = tokio::spawn(
+    // This handles the concurrency for tasks, because if one of these tasks
+    // when finished, we need to cancel any other task and end properly.
+    let result = tokio::select! {
+        r = ide_to_server => {
+            info!("IDE->SERVER task completed");
+            r?
+        },
+        r = server_to_ide => {
+            info!("SERVER->IDE task completed");
+            r?
+        },
+        r = signal_task => {
+            info!("Signal handler task completed");
+            r?
+        },
+    };
+
+    // Cancel all remaining tasks
+    cancel.cancel();
+
+    info!("LSP proxy shutdown complete");
+
+    result
+}
+
+/// Handle the main loop for reading and writing to and from the server/client
+fn main_loop<W, R>(
+    pair: Pair,
+    cancel: &CancellationToken,
+    config: &ProxyConfig,
+    reader: BufReader<R>,
+    mut writer: BufWriter<W>,
+) -> tokio::task::JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>>
+where
+    W: AsyncWrite + Unpin + Send + 'static,
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    let cancel_clone = cancel.clone();
+    let config_clone = config.clone();
+    let span = match pair {
+        Pair::Client => {
+            span!(Level::DEBUG, "IDE to SERVER")
+        }
+        Pair::Server => {
+            span!(Level::DEBUG, "SERVER to IDE")
+        }
+    };
+    tokio::spawn(
         async move {
-            let mut reader = LspFramedReader::new(stdin);
-            let mut initialized = false;
+            let mut reader = LspFramedReader::new(reader);
+            // for the server pair, not initialize method patch is required, then initialized = true
+            let mut initialized = matches!(pair, Pair::Server);
             loop {
                 tokio::select! {
-                _ = ide_cancel.cancelled() => {
-                    info!("IDE->SERVER task cancelled");
-                    break;
-                }
+                    _ = cancel_clone.cancelled() => {
+                        info!("task cancelled");
+                        break;
+                    }
 
                     message = reader.read_message() => {
-                        debug!("Read message from IDE");
+                        debug!("The message has been read");
                         match message {
                             Ok(Some(mut msg)) => {
-
-                                debug!("Incoming message from IDE");
                                 if !initialized {
                                     trace!("Trying to patch initialize method");
                                     initialized = patch_initialize_process_id(&mut msg);
@@ -68,11 +119,11 @@ where
                                     }
                                 }
 
-                                if client_config.use_docker {
-                                    redirect_uri(&mut msg, &Pair::Client, &client_config)?;
+                                if config_clone.use_docker {
+                                    redirect_uri(&mut msg, &pair, &config_clone)?;
                                 }
-                                send_message(&mut lsp_stdin, msg).await.map_err(|e| {
-                                    error!("Failed to forward the request to IDE: {}", e);
+                                send_message(&mut writer, msg).await.map_err(|e| {
+                                    error!("Failed to forward the request: {}", e);
                                     e
                                 })?;
                             }
@@ -92,76 +143,8 @@ where
             }
             Ok(())
         }
-        .instrument(ide_span),
-    );
-
-    // SERVER -> IDE
-    let lsp_cancel = cancel.clone();
-    let server_span = span!(Level::DEBUG, "Server to IDE");
-    let server_to_ide = tokio::spawn(
-        async move {
-            let mut reader = LspFramedReader::new(lsp_stdout);
-            loop {
-                tokio::select! {
-                    _ = lsp_cancel.cancelled() => {
-                        info!("SERVER->IDE task cancelled");
-                        break;
-                    },
-                        message =  reader.read_message() => {
-                        debug!("Read message from LSP");
-                        match message {
-                            Ok(Some(mut msg)) => {
-                                debug!("Incoming message from LSP");
-                                if config.use_docker {
-                                    redirect_uri(&mut msg, &Pair::Server, &config)?;
-                                }
-                                send_message(&mut stdout, msg).await.map_err(|e| {
-                                    error!("Failed to forward the request to LSP: {}", e);
-                                    e
-                                })?;
-                            }
-                            Ok(None) => {
-                                tokio::time::sleep(Duration::from_millis(30)).await;
-                                trace!("Empty response received");
-                                continue;
-                            }
-                            Err(_) => {
-                                tokio::time::sleep(Duration::from_millis(10)).await;
-                                error!("Unrecognized Lsp Response");
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            Ok(())
-        }
-        .instrument(server_span),
-    );
-
-    // This handles the concurrency for tasks, because if one of these tasks
-    // when finished, we need to cancel any other task and end properly.
-    let result = tokio::select! {
-        r = ide_to_server => {
-            info!("IDE->SERVER task completed");
-            r?
-        },
-            r = server_to_ide => {
-                info!("SERVER->IDE task completed");
-                r?
-            },
-            r = signal_task => {
-            info!("Signal handler task completed");
-            r?
-        },
-    };
-
-    // Cancel all remaining tasks
-    cancel.cancel();
-
-    info!("LSP proxy shutdown complete");
-
-    result
+        .instrument(span),
+    )
 }
 
 /// Handles the shutdown signal from the IDE
@@ -174,15 +157,15 @@ async fn shutdown_signal() -> Result<(), tokio::io::Error> {
     // Wait for any signal
     tokio::select! {
         _ = term.recv() => info!("SIGTERM received"),
-            _ = int.recv() => info!("SIGINT received"),
-            _ = hup.recv() => info!("SIGHUP received"),
-            _ = async {
-                let mut buf = [0u8; 1];
-                match tokio::io::stdin().read(&mut buf).await {
-                    Ok(0) | Err(_) => (), // EOF or error, either is fine
-                    _ => tokio::time::sleep(Duration::from_secs(3600*24*365)).await, // Wait forever if data received
-                }
-            } => info!("Stdin closed"),
+        _ = int.recv() => info!("SIGINT received"),
+        _ = hup.recv() => info!("SIGHUP received"),
+        _ = async {
+            let mut buf = [0u8; 1];
+            match tokio::io::stdin().read(&mut buf).await {
+                Ok(0) | Err(_) => (), // EOF or error, either is fine
+                _ => tokio::time::sleep(Duration::from_secs(3600*24*365)).await, // Wait forever if data received
+            }
+        } => info!("Stdin closed"),
     }
 
     debug!("Shutdown signal received");

@@ -98,8 +98,8 @@ where
     tokio::spawn(
         async move {
             let mut reader = LspFramedReader::new(reader);
-            // for the server pair, not initialize method patch is required, then initialized = true
-            let mut initialized = matches!(pair, Pair::Server);
+            // The PID patch is required only on the client side for the `initialize` method.
+            let mut require_pid_patch = matches!(pair, Pair::Client);
             loop {
                 tokio::select! {
                     _ = cancel_clone.cancelled() => {
@@ -111,12 +111,10 @@ where
                         debug!("The message has been read");
                         match message {
                             Ok(Some(mut msg)) => {
-                                if !initialized {
+                                if require_pid_patch {
                                     trace!("Trying to patch initialize method");
-                                    initialized = patch_initialize_process_id(&mut msg);
-                                    if !initialized {
-                                        trace!("Initialize method not found, skipping patch");
-                                    }
+                                    // The function returns true if the patch succeeds
+                                    require_pid_patch = !patch_initialize_process_id(&mut msg);
                                 }
 
                                 if config_clone.use_docker {

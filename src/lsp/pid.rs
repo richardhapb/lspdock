@@ -16,7 +16,6 @@ pub fn patch_initialize_process_id(raw_str: &mut String) -> bool {
         trace!(%raw_str, "patched");
         return true;
     }
+    trace!("Initialize method not found, skipping patch");
     return false;
 }
-
-

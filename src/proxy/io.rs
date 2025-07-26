@@ -3,7 +3,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 
 use crate::lsp::{
-    binding::redirect_uri,
+    binding::{RequestTracker, redirect_uri},
     parser::{LspFramedReader, send_message},
     pid::patch_initialize_process_id,
 };
@@ -40,11 +40,20 @@ where
         Ok(())
     });
 
+    let tracker = RequestTracker::new(config.clone());
+
     // The client writes to proxy stdin and proxy writes to LSP stdin
-    let ide_to_server = main_loop(Pair::Client, &cancel, &config, stdin, lsp_stdin);
+    let ide_to_server = main_loop(
+        Pair::Client,
+        &cancel,
+        &config,
+        stdin,
+        lsp_stdin,
+        tracker.clone(),
+    );
     // The LSP writes to stdout, and the proxy reads from it. The proxy also writes to its stdout
     // and the client reads from it
-    let server_to_ide = main_loop(Pair::Server, &cancel, &config, lsp_stdout, stdout);
+    let server_to_ide = main_loop(Pair::Server, &cancel, &config, lsp_stdout, stdout, tracker);
 
     info!("LSP Proxy: Lsp listening for incoming messages...");
 
@@ -80,6 +89,7 @@ fn main_loop<W, R>(
     config: &ProxyConfig,
     reader: BufReader<R>,
     mut writer: BufWriter<W>,
+    tracker: RequestTracker,
 ) -> tokio::task::JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>>
 where
     W: AsyncWrite + Unpin + Send + 'static,
@@ -87,6 +97,7 @@ where
 {
     let cancel_clone = cancel.clone();
     let config_clone = config.clone();
+    let tracker_inner = tracker.clone();
     let span = match pair {
         Pair::Client => {
             span!(Level::DEBUG, "IDE to SERVER")
@@ -119,6 +130,7 @@ where
 
                                 if config_clone.use_docker {
                                     redirect_uri(&mut msg, &pair, &config_clone)?;
+                                    tracker_inner.check_for_definition_method(&mut msg, &pair).await?;
                                 }
                                 send_message(&mut writer, msg).await.map_err(|e| {
                                     error!("Failed to forward the request: {}", e);

@@ -1,7 +1,15 @@
 use crate::{config::ProxyConfig, proxy::Pair};
-use std::{process::Stdio, str};
-use tokio::{fs::{create_dir_all, File}, io::{AsyncReadExt, AsyncWriteExt, BufReader}, process::Command};
-use tracing::trace;
+use serde_json::{Value, json};
+use std::{path::PathBuf, process::Stdio, str, sync::Arc};
+use tokio::{
+    fs::{File, create_dir_all},
+    io::AsyncWriteExt,
+    process::Command,
+};
+use tracing::{debug, trace};
+
+use std::collections::HashMap;
+use tokio::sync::RwLock;
 
 /// Redirect the paths from the sender pair to the receiver pair; this is used
 /// for matching the paths between the container and the host path.
@@ -69,51 +77,166 @@ pub fn redirect_uri(
 // lsproxy: args received args=Args { inner: ["/Users/richard/proj/lsproxy/target/debug/lsproxy", "--stdio"] }
 // lsproxy: full command cmd_args=["exec", "-i", "--workdir", "/usr/src/app", "development-web-1", "pyright-lan
 
-pub async fn bind_library(uri: String, config: &ProxyConfig) -> std::io::Result<()> {
-    let temp_dir = std::env::temp_dir().join("lsproxy");
-    let temp_uri = temp_dir.join(&uri);
-
-    // Create the directories if they do not exist
-    if let Some(parent) = temp_uri.parent() {
-        create_dir_all(parent).await?;
-    }
-
-    copy_file(uri, temp_uri.to_str().expect("convert the uri to string"), config).await?;
-
-    Ok(())
+/// Track the definition method related requests for interchanging URIs and handling different requests.
+/// Cloning is cheap, O(1).
+#[derive(Clone)]
+pub struct RequestTracker {
+    map: Arc<RwLock<HashMap<u64, String>>>,
+    config: Arc<ProxyConfig>,
 }
 
-async fn copy_file(path: String, destination: &str, config: &ProxyConfig) -> std::io::Result<()> {
-    let mut cmd = if config.use_docker {
-        Command::new("docker")
-            .args(vec![
-                "exec".into(),
-                config.container.clone(),
-                "cat".into(),
-                path,
-            ])
-            .stdout(Stdio::piped())
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("execute docker command")
-    } else {
-        Command::new("cat")
-            .args(vec![path])
-            .stdout(Stdio::piped())
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("read the file")
-    };
+impl RequestTracker {
+    pub fn new(config: ProxyConfig) -> Self {
+        Self {
+            map: Arc::new(RwLock::new(HashMap::new())),
+            config: Arc::new(config),
+        }
+    }
 
-    let mut stdout = BufReader::new(cmd.stdout.take().expect("take stdout"));
+    async fn track(&self, id: u64, method: &str) {
+        self.map.write().await.insert(id, method.to_string());
+    }
 
-    let mut buf = vec![];
-    stdout.read_to_end(&mut buf).await?;
+    async fn take_if_match(&self, id: u64, expected: &str) -> bool {
+        self.map
+            .write()
+            .await
+            .remove(&id)
+            .map(|m| m == expected)
+            .unwrap_or(false)
+    }
 
-    let mut file = File::create(destination).await?;
-    file.write(&buf).await?;
+    pub async fn check_for_definition_method(
+        &self,
+        raw_str: &mut String,
+        pair: &Pair,
+    ) -> std::io::Result<()> {
+        match pair {
+            Pair::Server => {
+                let mut v: Value = serde_json::from_str(&raw_str)?;
 
-    Ok(())
+                // Check if this is a response to a tracked request
+                if let Some(id) = v.get("id").and_then(Value::as_u64) {
+                    debug!("Checking for definition method");
+
+                    let matches = self.take_if_match(id, "textDocument/definition").await;
+                    debug!(%matches);
+                    if matches {
+                        trace!(%id, "matches");
+                        if let Some(results) = v.get_mut("result").and_then(Value::as_array_mut) {
+                            trace!(?results);
+                            for result in results {
+                                if let Some(uri_val) = result.get("uri").and_then(|u| u.as_str()) {
+                                    if !self.config.pattern.contains(&uri_val) {
+                                        debug!(%uri_val);
+                                        let new_uri =
+                                            self.bind_library(uri_val.to_string()).await?;
+                                        debug!("file://{}", new_uri);
+
+                                        Self::modify_uri(result, &new_uri);
+                                    }
+                                }
+                            }
+                            *raw_str = v.to_string(); // write back the modified JSON
+                        }
+                    }
+                }
+            }
+
+            Pair::Client => {
+                let v: Value = serde_json::from_str(&raw_str)?;
+
+                debug!("Checking for id");
+                if let Some(id) = v.get("id").and_then(Value::as_u64) {
+                    debug!(%id);
+
+                    if let Some(method) = v.get("method").and_then(Value::as_str) {
+                        trace!(%method);
+                        // Only track "textDocument/definition" if URI matches
+                        if method == "textDocument/definition" {
+                            debug!(%id, "Storing");
+                            self.track(id, method).await;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn bind_library(&self, uri: String) -> std::io::Result<String> {
+        let temp_dir = std::env::temp_dir().join("lsproxy");
+
+        let safe_path = PathBuf::from(uri.strip_prefix("file://").unwrap_or(&uri));
+        let file_name = safe_path
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("unnamed"))
+            .to_string_lossy();
+
+        let temp_uri = temp_dir.join(file_name.to_string());
+
+        // Create the directories if they do not exist
+        if let Some(parent) = temp_uri.parent() {
+            create_dir_all(parent).await?;
+        }
+        let temp_uri = temp_uri.to_string_lossy().to_string();
+        let safe_path = safe_path.to_string_lossy().to_string();
+
+        self.copy_file(safe_path, &temp_uri).await?;
+
+        Ok(temp_uri)
+    }
+
+    /// Copies a file from either the local filesystem or a Docker container.
+    async fn copy_file(&self, path: String, destination: &str) -> std::io::Result<()> {
+        tracing::debug!("Starting file copy from {} to {}", path, destination);
+
+        let cmd = if self.config.use_docker {
+            tracing::debug!("Using docker to copy file");
+            Command::new("docker")
+                .args(&["exec", &self.config.container, "cat", &path])
+                .stdout(Stdio::piped())
+                .stdin(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("failed to spawn docker command")
+        } else {
+            tracing::debug!("Using local cat to copy file");
+            Command::new("cat")
+                .arg(&path)
+                .stdout(Stdio::piped())
+                .stdin(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("failed to spawn local cat command")
+        };
+
+        let status = cmd.wait_with_output().await?;
+
+        if !status.status.success() {
+            let stderr = String::from_utf8_lossy(&status.stderr);
+            tracing::error!("Command failed with status {}: {}", status.status, stderr);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("command failed: {}", stderr),
+            ));
+        }
+
+        let mut file = File::create(destination).await?;
+        file.write_all(&status.stdout).await?;
+
+        tracing::debug!(
+            "Successfully wrote {} bytes to {}",
+            status.stdout.len(),
+            destination
+        );
+        Ok(())
+    }
+
+    fn modify_uri(result: &mut Value, new_uri: &str) {
+        if let Some(uri) = result.get_mut("uri") {
+            *uri = json!(format!("file://{}", new_uri));
+        };
+    }
 }

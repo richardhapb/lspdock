@@ -127,7 +127,7 @@ impl RequestTracker {
                             trace!(?results);
                             for result in results {
                                 if let Some(uri_val) = result.get("uri").and_then(|u| u.as_str()) {
-                                    if !self.config.pattern.contains(&uri_val) {
+                                    if !(uri_val.contains(&self.config.pattern)) {
                                         debug!(%uri_val);
                                         let new_uri =
                                             self.bind_library(uri_val.to_string()).await?;

@@ -70,9 +70,8 @@ impl<R: AsyncRead + Unpin> LspFramedReader<R> {
 
                 trace!("Header key: '{}', value: '{}'", key, value);
 
-                // Check for Content-Length with case-insensitive matching and handle truncated headers
-                // TODO: WHY the first message is captured as `ontent-length`
-                if key.eq_ignore_ascii_case("content-length") || key.eq_ignore_ascii_case("ontent-length") {
+                // Check for Content-Length with case-insensitive matching
+                if key.eq_ignore_ascii_case("content-length") {
                     match value.parse::<usize>() {
                         Ok(len) => {
                             content_length = Some(len);

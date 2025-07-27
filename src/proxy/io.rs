@@ -7,7 +7,7 @@ use crate::lsp::{
     parser::{LspFramedReader, send_message},
     pid::patch_initialize_process_id,
 };
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, BufReader, BufWriter};
+use tokio::io::{AsyncRead, AsyncWrite, BufReader, BufWriter};
 use tracing::{Instrument, Level, debug, error, info, span, trace};
 
 use crate::config::ProxyConfig;
@@ -173,13 +173,6 @@ async fn shutdown_signal() -> Result<(), tokio::io::Error> {
         _ = term.recv() => info!("SIGTERM received"),
         _ = int.recv() => info!("SIGINT received"),
         _ = hup.recv() => info!("SIGHUP received"),
-        _ = async {
-            let mut buf = [0u8; 1];
-            match tokio::io::stdin().read(&mut buf).await {
-                Ok(0) | Err(_) => (), // EOF or error, either is fine
-                _ => tokio::time::sleep(Duration::from_secs(3600*24*365)).await, // Wait forever if data received
-            }
-        } => info!("Stdin closed"),
     }
 
     debug!("Shutdown signal received");

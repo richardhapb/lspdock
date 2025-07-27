@@ -28,7 +28,7 @@ flowchart TD
 
 
 > [!WARNING]
-> LSProxy is currently in the development process and is in Alpha state. Some features are not available yet, such as the built-in and external libraries for the 'go to definition' LSP feature, because the Python environment is inside the container. I appreciate any issues you encounter; please report them so we can fix them and make this app more reliable.
+> LSProxy is currently in the development process and is in Alpha state. Some features are not available yet. I appreciate any issues you encounter; please report them, so I can fix them and make this app more reliable.
 
 ---
 
@@ -159,4 +159,4 @@ Contributions are welcome! Feel free to open issues or submit pull requests.
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License.

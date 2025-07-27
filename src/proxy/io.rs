@@ -5,7 +5,7 @@ use tokio_util::sync::CancellationToken;
 use crate::lsp::{
     binding::{RequestTracker, redirect_uri},
     parser::{LspFramedReader, send_message},
-    pid::patch_initialize_process_id,
+    pid::PidHandler,
 };
 use tokio::io::{AsyncRead, AsyncWrite, BufReader, BufWriter};
 use tracing::{Instrument, Level, debug, error, info, span, trace};
@@ -95,7 +95,7 @@ where
     W: AsyncWrite + Unpin + Send + 'static,
     R: AsyncRead + Unpin + Send + 'static,
 {
-    let cancel_clone = cancel.clone();
+    let cancel_monitor = cancel.clone();
     let config_clone = config.clone();
     let tracker_inner = tracker.clone();
     let span = match pair {
@@ -109,11 +109,15 @@ where
     tokio::spawn(
         async move {
             let mut reader = LspFramedReader::new(reader);
+            let cancel_provider = cancel_monitor.clone();
             // The PID patch is required only on the client side for the `initialize` method.
-            let mut require_pid_patch = matches!(pair, Pair::Client);
+            let mut pid_handler: Option<PidHandler> = match pair {
+                Pair::Server => None,
+                Pair::Client => Some(PidHandler::new(cancel_provider)),
+            };
             loop {
                 tokio::select! {
-                    _ = cancel_clone.cancelled() => {
+                    _ = cancel_monitor.cancelled() => {
                         info!("task cancelled");
                         break;
                     }
@@ -125,10 +129,16 @@ where
                                 trace!(msgs_len=msgs.len());
                                 trace!(?msgs);
                                 for mut msg in msgs {
-                                    if require_pid_patch {
-                                        trace!("Trying to patch initialize method");
-                                        // The function returns true if the patch succeeds
-                                        require_pid_patch = !patch_initialize_process_id(&mut msg);
+                                    if let Some(ref mut pid_handler_ref) = pid_handler {
+                                        trace!("Trying to take the PID from the initialize method");
+                                        // The function returns true if the take succeeds
+                                        if pid_handler_ref.try_take_initialize_process_id(&mut msg)? {
+                                            debug!("The PID has been captured from the initialize method, setting pid_handler to None");
+                                            // Set the pid_handler to None to avoid attempting to patch the PID again
+                                            if let Some(pid_handler) = pid_handler.take() {
+                                                tokio::spawn(async move { pid_handler.monitor_pid().await });
+                                            }
+                                        }
                                     }
 
                                     if config_clone.use_docker {

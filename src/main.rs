@@ -23,7 +23,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))
         .with(tracing_subscriber::fmt::layer().with_writer(file))
         .init();
-
     let home = dirs::home_dir().unwrap_or(PathBuf::new());
     let config_path = home.join(".config").join("lsproxy").join("lsproxy.toml");
     let config = ProxyConfig::from_file(&config_path).map_err(|e| {

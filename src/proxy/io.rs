@@ -118,24 +118,28 @@ where
                         break;
                     }
 
-                    message = reader.read_message() => {
-                        debug!("The message has been read");
-                        match message {
-                            Ok(Some(mut msg)) => {
-                                if require_pid_patch {
-                                    trace!("Trying to patch initialize method");
-                                    // The function returns true if the patch succeeds
-                                    require_pid_patch = !patch_initialize_process_id(&mut msg);
-                                }
+                    messages = reader.read_messages() => {
+                        debug!("Messages has been read");
+                        match messages {
+                            Ok(Some(msgs)) => {
+                                trace!(msgs_len=msgs.len());
+                                trace!(?msgs);
+                                for mut msg in msgs {
+                                    if require_pid_patch {
+                                        trace!("Trying to patch initialize method");
+                                        // The function returns true if the patch succeeds
+                                        require_pid_patch = !patch_initialize_process_id(&mut msg);
+                                    }
 
-                                if config_clone.use_docker {
-                                    redirect_uri(&mut msg, &pair, &config_clone)?;
-                                    tracker_inner.check_for_definition_method(&mut msg, &pair).await?;
+                                    if config_clone.use_docker {
+                                        redirect_uri(&mut msg, &pair, &config_clone)?;
+                                        tracker_inner.check_for_definition_method(&mut msg, &pair).await?;
+                                    }
+                                    send_message(&mut writer, msg).await.map_err(|e| {
+                                        error!("Failed to forward the request: {}", e);
+                                        e
+                                    })?;
                                 }
-                                send_message(&mut writer, msg).await.map_err(|e| {
-                                    error!("Failed to forward the request: {}", e);
-                                    e
-                                })?;
                             }
                             Ok(None) => {
                                 tokio::time::sleep(Duration::from_millis(30)).await;

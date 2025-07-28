@@ -16,7 +16,28 @@ impl<R: AsyncRead + Unpin> LspFramedReader<R> {
         }
     }
 
-    /// Read messages from the sender and capture their content
+    /// Read messages from the sender and capture their content. Returns a [`Vec<String>`] with the
+    /// messages or None if there are not messages.
+    ///
+    /// Reading the messages as a Finite State Machine model (FSM) (https://en.wikipedia.org/wiki/Finite-state_machine).
+    /// When we are reading the header, the the state doesn't change until the header is completely read. Therefore,
+    /// when reading the header, the state finishes and transitions to the reading body state, but does not
+    /// transition back to the reading header state until the body has been read.
+    ///
+    /// ```text
+    ///         +-------------read ends-------------+     +------------------+
+    ///         |                                   |     |                  |
+    ///         v                                   |     v                  |
+    /// +-----------+                            +------------               |
+    /// |           |------read ends------------>|           |               |
+    /// |  Reading  |                            |  Reading  |-----reading---+
+    /// |  Header   |-----reading--+             |   Body    |
+    /// |           |              |             |           |
+    /// +-----------+              |             +-----------+
+    ///         ^                  |
+    ///         |                  |
+    ///         +------------------+
+    /// ```
     pub async fn read_messages(
         &mut self,
     ) -> Result<Option<Vec<String>>, Box<dyn Error + Send + Sync>> {
@@ -34,6 +55,8 @@ impl<R: AsyncRead + Unpin> LspFramedReader<R> {
         Ok(Some(messages))
     }
 
+    /// Capture a message from the buffer.
+    /// If the header, content-length, or body is None, return None and reset the FSM's state.
     fn try_parse_message(&self) -> Option<(String, usize)> {
         let header_end = self.find_header_end()?;
         trace!(header_end);
@@ -45,6 +68,7 @@ impl<R: AsyncRead + Unpin> LspFramedReader<R> {
         Some((body, advance))
     }
 
+    /// Find the end of the header, which is marked by `\r\n\r\n`
     fn find_header_end(&self) -> Option<usize> {
         for i in 3..self.buffer.len() {
             if &self.buffer[i - 3..=i] == b"\r\n\r\n" {
@@ -54,6 +78,7 @@ impl<R: AsyncRead + Unpin> LspFramedReader<R> {
         return None;
     }
 
+    /// Extract the content length value from the header
     fn extract_content_length(&self, headers: &[u8]) -> Option<usize> {
         let headers_str = String::from_utf8(headers.to_vec()).ok()?;
         let mut content_length = None;
@@ -94,6 +119,8 @@ impl<R: AsyncRead + Unpin> LspFramedReader<R> {
         content_length
     }
 
+    /// Extract the body of the message. If the buffer doesn't have enough data to complete the body,
+    /// according to the content length, return None
     fn extract_body(&self, header_end: usize, content_length: usize) -> Option<(String, usize)> {
         let message_start = header_end;
         let message_end = header_end + content_length;

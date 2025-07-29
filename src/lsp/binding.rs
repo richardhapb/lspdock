@@ -111,6 +111,11 @@ impl RequestTracker {
         raw_str: &mut String,
         pair: &Pair,
     ) -> std::io::Result<()> {
+        // If the LSP is not in a container, there is no need to track this.
+        if !self.config.use_docker {
+            return Ok(());
+        }
+
         match pair {
             Pair::Server => {
                 let mut v: Value = serde_json::from_str(&raw_str)?;
@@ -133,9 +138,7 @@ impl RequestTracker {
                                             self.bind_library(uri_val.to_string()).await?;
                                         debug!("file://{}", new_uri);
 
-                                        if self.config.use_docker {
-                                            Self::modify_uri(result, &new_uri);
-                                        }
+                                        Self::modify_uri(result, &new_uri);
                                     }
                                 }
                             }
@@ -193,36 +196,34 @@ impl RequestTracker {
     /// Copies a file from either the local filesystem or a Docker container.
     async fn copy_file(&self, path: String, destination: &str) -> std::io::Result<()> {
         // Only copy the file if the LSP is in a container
-        if self.config.use_docker {
-            debug!("Starting file copy from {} to {}", path, destination);
-            let cmd = Command::new("docker")
-                .args(&["exec", &self.config.container, "cat", &path])
-                .stdout(Stdio::piped())
-                .stdin(Stdio::null())
-                .stderr(Stdio::piped())
-                .spawn()
-                .expect("spawn docker command");
+        debug!("Starting file copy from {} to {}", path, destination);
+        let cmd = Command::new("docker")
+            .args(&["exec", &self.config.container, "cat", &path])
+            .stdout(Stdio::piped())
+            .stdin(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn docker command");
 
-            let status = cmd.wait_with_output().await?;
+        let status = cmd.wait_with_output().await?;
 
-            if !status.status.success() {
-                let stderr = String::from_utf8_lossy(&status.stderr);
-                tracing::error!("Command failed with status {}: {}", status.status, stderr);
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("command failed: {}", stderr),
-                ));
-            }
-
-            let mut file = File::create(destination).await?;
-            file.write_all(&status.stdout).await?;
-
-            debug!(
-                "Successfully wrote {} bytes to {}",
-                status.stdout.len(),
-                destination
-            );
+        if !status.status.success() {
+            let stderr = String::from_utf8_lossy(&status.stderr);
+            tracing::error!("Command failed with status {}: {}", status.status, stderr);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("command failed: {}", stderr),
+            ));
         }
+
+        let mut file = File::create(destination).await?;
+        file.write_all(&status.stdout).await?;
+
+        debug!(
+            "Successfully wrote {} bytes to {}",
+            status.stdout.len(),
+            destination
+        );
         Ok(())
     }
 

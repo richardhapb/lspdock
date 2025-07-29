@@ -41,7 +41,11 @@ flowchart TD
 
 ---
 
-## Installation
+## Getting started
+
+Download the release for your system, or build it from source.
+
+## Build from source
 
 ### Prerequisites
 

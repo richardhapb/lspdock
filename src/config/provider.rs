@@ -60,6 +60,16 @@ impl ProxyConfig {
         parent_var.expand(&mut config).unwrap();
         home_var.expand(&mut config).unwrap();
 
+       // Normalize paths for Windows
+        #[cfg(windows)]
+        {
+            config.container = normalize_path(&config.container);
+            config.local_path = normalize_path(&config.local_path);
+            config.docker_internal_path = normalize_path(&config.docker_internal_path);
+            config.pattern = normalize_path(&config.pattern);
+            config.executable = normalize_path(&config.executable);
+        }
+
         let cwd = current_dir()?;
         let cwd = cwd.to_str().expect("get current dir");
         config.use_docker = cwd.contains(&config.pattern);
@@ -67,3 +77,12 @@ impl ProxyConfig {
         Ok(config)
     }
 }
+
+// Helper function to normalize paths
+#[cfg(windows)]
+fn normalize_path(path: &str) -> String {
+    std::path::Path::new(path)
+        .to_string_lossy()
+        .replace("/", "\\")
+}
+

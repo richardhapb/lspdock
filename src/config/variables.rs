@@ -52,7 +52,6 @@ impl Default for VariableHome {
     }
 }
 
-
 impl VariableResolver for VariableCwd {
     fn expand(self, config: &mut ProxyConfig) -> Result<(), Box<dyn std::error::Error>> {
         let var = format!("${}", self.0.name.to_uppercase());
@@ -83,7 +82,8 @@ impl VariableResolver for VariableParent {
 impl VariableResolver for VariableHome {
     fn expand(self, config: &mut ProxyConfig) -> Result<(), Box<dyn std::error::Error>> {
         let var = format!("${}", self.0.name.to_uppercase());
-        let home = dirs::home_dir().ok_or_else(|| "Could not retrieve home directory".to_string())?;
+        let home =
+            dirs::home_dir().ok_or_else(|| "Could not retrieve home directory".to_string())?;
         let expanded = home
             .to_str()
             .ok_or_else(|| "Could not convert home to string".to_string())?;
@@ -104,6 +104,15 @@ fn expand_into_config(config: &mut ProxyConfig, var: &str, expanded: &str) {
 
     for field in fields {
         *field = field.replace(var, expanded);
+
+        // Normalize paths for Windows
+        #[cfg(windows)]
+        {
+            let normalized = std::path::Path::new(field)
+                .to_string_lossy()
+                .replace("/", "\\");
+            *field = normalized;
+        }
     }
 }
 
@@ -121,6 +130,7 @@ mod tests {
             local_path: "$CWD/app".into(),
             docker_internal_path: "/some/path".into(),
             pattern: "$HOME/dev".into(),
+            log_level: None,
             executable: "rust_analyzer".into(),
             use_docker: false,
         };

@@ -133,7 +133,9 @@ impl RequestTracker {
                                             self.bind_library(uri_val.to_string()).await?;
                                         debug!("file://{}", new_uri);
 
-                                        Self::modify_uri(result, &new_uri);
+                                        if self.config.use_docker {
+                                            Self::modify_uri(result, &new_uri);
+                                        }
                                     }
                                 }
                             }
@@ -190,10 +192,9 @@ impl RequestTracker {
 
     /// Copies a file from either the local filesystem or a Docker container.
     async fn copy_file(&self, path: String, destination: &str) -> std::io::Result<()> {
-        tracing::debug!("Starting file copy from {} to {}", path, destination);
-
+        // Only copy the file if the LSP is in a container
         if self.config.use_docker {
-            tracing::debug!("Using docker to copy file");
+            debug!("Starting file copy from {} to {}", path, destination);
             let cmd = Command::new("docker")
                 .args(&["exec", &self.config.container, "cat", &path])
                 .stdout(Stdio::piped())
@@ -215,14 +216,13 @@ impl RequestTracker {
 
             let mut file = File::create(destination).await?;
             file.write_all(&status.stdout).await?;
-        } else {
-            debug!("Using Rust-native file copy");
-            let content = tokio::fs::read(&path).await?;
-            let mut file = File::create(destination).await?;
-            file.write_all(&content).await?;
-        }
 
-        debug!("Successfully copied file to {}", destination);
+            debug!(
+                "Successfully wrote {} bytes to {}",
+                status.stdout.len(),
+                destination
+            );
+        }
         Ok(())
     }
 

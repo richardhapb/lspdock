@@ -12,6 +12,8 @@ use tracing::{Instrument, Level, debug, error, info, span, trace};
 use crate::config::ProxyConfig;
 
 const GOTO_METHODS: &[&str] = &["textDocument/definition", "textDocument/declaration", "textDocument/typeDefinition"];
+// This prevents an infinite loop if the LSP or the IDE doesn't respond correctly
+const MAX_EMPTY_RESPONSES_THRESHOLD: usize = 15;
 
 #[derive(Debug)]
 pub enum Pair {
@@ -110,6 +112,7 @@ where
     tokio::spawn(
         async move {
             let mut reader = LspFramedReader::new(reader);
+            let mut empty_counter = 0;
             let cancel_provider = cancel_monitor.clone();
             // The PID patch is required only on the client side for the `initialize` method.
             let mut pid_handler: Option<PidHandler> = match pair {
@@ -129,6 +132,19 @@ where
                             Ok(Some(msgs)) => {
                                 trace!(msgs_len=msgs.len());
                                 trace!(?msgs);
+
+                                // If the messages are empty, increase the counter
+                                empty_counter = if msgs.is_empty() {
+                                    empty_counter + 1
+                                } else {
+                                    0
+                                };
+
+                                if empty_counter >= MAX_EMPTY_RESPONSES_THRESHOLD {
+                                    info!("The empty response has reached the threshold; exiting");
+                                    break;
+                                }
+
                                 for mut msg in msgs {
                                     if let Some(ref mut pid_handler_ref) = pid_handler {
                                         trace!("Trying to take the PID from the initialize method");

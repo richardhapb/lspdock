@@ -1,0 +1,106 @@
+name: Cross Build and Test
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          # Linux + Windows on Ubuntu (use cross)
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            use_cross: true
+          - target: x86_64-pc-windows-gnu
+            runner: ubuntu-latest
+            use_cross: true
+          # macOS on macOS (native)
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            use_cross: false
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+          components: rustfmt
+
+      - name: Install cross (Ubuntu only)
+        if: ${{ matrix.use_cross }}
+        run: cargo install cross
+
+      - name: Run tests (except on Windows)
+        if: ${{ !contains(matrix.target, 'windows') }}
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross test --target ${{ matrix.target }}
+          else
+            cargo test --target ${{ matrix.target }}
+          fi
+
+      - name: Warn about skipped Windows tests
+        if: ${{ contains(matrix.target, 'windows') }}
+        run: echo "Skipping tests for ${{ matrix.target }} (cannot run Windows tests on Ubuntu CI)"
+
+      - name: Build release binary
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+
+      - name: Package artifact
+        run: |
+          mkdir -p dist
+          BIN=lsproxy
+          EXT=""
+          ARCHIVE_EXT="tar.gz"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            EXT=".exe"
+            ARCHIVE_EXT="zip"
+          fi
+          cp target/${{ matrix.target }}/release/$BIN$EXT dist/
+          pushd dist
+          if [[ "$ARCHIVE_EXT" == "zip" ]]; then
+            zip -r "${BIN}-${{ matrix.target }}.zip" "$BIN$EXT"
+          else
+            tar czf "${BIN}-${{ matrix.target }}.tar.gz" "$BIN$EXT"
+          fi
+          popd
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lsproxy-${{ matrix.target }}
+          path: dist/lsproxy-${{ matrix.target }}.*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
+

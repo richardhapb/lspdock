@@ -1,4 +1,4 @@
-use std::{path::PathBuf, process::Stdio};
+use std::process::Stdio;
 use tokio::process::Command;
 use tracing::{debug, error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -11,24 +11,41 @@ use tokio::io::{BufReader, BufWriter};
 use config::ProxyConfig;
 use proxy::forward_proxy;
 
+use crate::config::resolve_config_path;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize file logging instead of stdout/stderr
-    let file = std::fs::File::create("/tmp/lsproxy_trace.log")
-        .map_err(|e| format!("Failed to create log file: {}", e))?;
-
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
-        ))
-        .with(tracing_subscriber::fmt::layer().with_writer(file))
-        .init();
-    let home = dirs::home_dir().unwrap_or(PathBuf::new());
-    let config_path = home.join(".config").join("lsproxy").join("lsproxy.toml");
+    let config_path = resolve_config_path()?;
     let config = ProxyConfig::from_file(&config_path).map_err(|e| {
         error!("Error retrieving config: {e}");
         e
     })?;
+
+    let file;
+
+    // Initialize file logging instead of stdout/stderr
+    #[cfg(unix)]
+    {
+        file = std::fs::File::create("/tmp/lsproxy_trace.log")
+            .map_err(|e| format!("Failed to create log file: {}", e))?;
+    }
+
+    #[cfg(windows)]
+    {
+        let log_file_path = std::env::temp_dir().join("lsproxy_trace.log");
+        file = std::fs::File::create(log_file_path)
+            .map_err(|e| format!("Failed to create log file: {}", e))?;
+    }
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(
+            config
+                .log_level
+                .clone()
+                .unwrap_or_else(|| std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into())),
+        ))
+        .with(tracing_subscriber::fmt::layer().with_writer(file))
+        .init();
 
     debug!(?config, "configuration file");
 

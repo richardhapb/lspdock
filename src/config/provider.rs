@@ -39,6 +39,7 @@ pub struct ProxyConfig {
     pub container: String,
     pub local_path: String,
     pub docker_internal_path: String,
+    pub log_level: Option<String>,
     pub executable: String,
     /// This serves as a pattern for the proxy to Docker; if the pattern doesn't match, the proxy will
     /// forward requests directly to the local LSP.

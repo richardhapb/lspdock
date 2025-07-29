@@ -192,45 +192,37 @@ impl RequestTracker {
     async fn copy_file(&self, path: String, destination: &str) -> std::io::Result<()> {
         tracing::debug!("Starting file copy from {} to {}", path, destination);
 
-        let cmd = if self.config.use_docker {
+        if self.config.use_docker {
             tracing::debug!("Using docker to copy file");
-            Command::new("docker")
+            let cmd = Command::new("docker")
                 .args(&["exec", &self.config.container, "cat", &path])
                 .stdout(Stdio::piped())
                 .stdin(Stdio::null())
                 .stderr(Stdio::piped())
                 .spawn()
-                .expect("failed to spawn docker command")
+                .expect("spawn docker command");
+
+            let status = cmd.wait_with_output().await?;
+
+            if !status.status.success() {
+                let stderr = String::from_utf8_lossy(&status.stderr);
+                tracing::error!("Command failed with status {}: {}", status.status, stderr);
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("command failed: {}", stderr),
+                ));
+            }
+
+            let mut file = File::create(destination).await?;
+            file.write_all(&status.stdout).await?;
         } else {
-            tracing::debug!("Using local cat to copy file");
-            Command::new("cat")
-                .arg(&path)
-                .stdout(Stdio::piped())
-                .stdin(Stdio::null())
-                .stderr(Stdio::piped())
-                .spawn()
-                .expect("failed to spawn local cat command")
-        };
-
-        let status = cmd.wait_with_output().await?;
-
-        if !status.status.success() {
-            let stderr = String::from_utf8_lossy(&status.stderr);
-            tracing::error!("Command failed with status {}: {}", status.status, stderr);
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("command failed: {}", stderr),
-            ));
+            debug!("Using Rust-native file copy");
+            let content = tokio::fs::read(&path).await?;
+            let mut file = File::create(destination).await?;
+            file.write_all(&content).await?;
         }
 
-        let mut file = File::create(destination).await?;
-        file.write_all(&status.stdout).await?;
-
-        tracing::debug!(
-            "Successfully wrote {} bytes to {}",
-            status.stdout.len(),
-            destination
-        );
+        debug!("Successfully copied file to {}", destination);
         Ok(())
     }
 

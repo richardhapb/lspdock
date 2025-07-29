@@ -91,6 +91,9 @@ executable = "rust-analyzer"
 
 # Pattern to determine if Docker should be used
 pattern = "/usr/src/app"
+
+# Optional: Log level; default is info
+log_level = "debug"
 ```
 
 If the pattern is not present in the current working directory, the proxy acts as the target LSP, without changing any messages, and redirects it directly. Also, the logs of the messages continue to be captured and written to the log file.
@@ -132,7 +135,8 @@ Refer to the [IDEs configuration guide](ides.md) for detailed configuration step
 
 ### Logs
 
-Logs are written to `/tmp/lsproxy_trace.log`. You can monitor the logs for debugging:
+Logs are written to a temporary directory. On Unix systems, this is located at `/tmp/lsproxy_trace.log`, and on Windows, it is located at `C:/Windows/Temp`. You can monitor the logs for debugging:
+
 ```bash
 tail -f /tmp/lsproxy_trace.log
 ```

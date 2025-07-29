@@ -1,5 +1,4 @@
 use std::time::Duration;
-use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 
 use crate::lsp::{
@@ -172,19 +171,27 @@ where
 }
 
 /// Handles the shutdown signal from the IDE
+#[cfg(unix)]
 async fn shutdown_signal() -> Result<(), tokio::io::Error> {
-    // Create signal streams
+    use tokio::signal::unix::{SignalKind, signal};
+
     let mut term = signal(SignalKind::terminate())?;
     let mut int = signal(SignalKind::interrupt())?;
     let mut hup = signal(SignalKind::hangup())?;
 
-    // Wait for any signal
     tokio::select! {
-        _ = term.recv() => info!("SIGTERM received"),
-        _ = int.recv() => info!("SIGINT received"),
-        _ = hup.recv() => info!("SIGHUP received"),
+        _ = term.recv() => tracing::info!("SIGTERM received"),
+        _ = int.recv() => tracing::info!("SIGINT received"),
+        _ = hup.recv() => tracing::info!("SIGHUP received"),
     }
 
     debug!("Shutdown signal received");
+    Ok(())
+}
+
+#[cfg(windows)]
+async fn shutdown_signal() -> Result<(), tokio::io::Error> {
+    tokio::signal::ctrl_c().await?;
+    tracing::info!("Ctrl+C received");
     Ok(())
 }

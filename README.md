@@ -26,22 +26,19 @@ flowchart TD
    - LSProxy acts as a middle layer between the IDE and the LSP server.
    - LSProxy dynamically redirects paths, ensuring seamless communication between the IDE and the LSP server inside Docker.
 
-
-> [!WARNING]
-> LSProxy is currently in the development process and is in Alpha state. Some features are not available yet. I appreciate any issues you encounter; please report them, so I can fix them and make this app more reliable.
-
 ---
 
 ## Features
 
-- **Dynamic Path Redirection**: Automatically adjusts paths between host and container environments.
 - **Docker Integration**: Supports running LSP servers inside Docker containers.
+- **Dynamic Path Redirection**: Automatically adjusts paths between host and container environments.
+- **Match container environment**: If a method like `textDocument/definition` points to a third-party library inside a container, that file will be cloned into the local environment, allowing the IDE to navigate to it.
 - **Configurable Variables**: Customize paths and behavior using environment variables and configuration files.
 - **Logging**: Detailed logs for debugging and monitoring.
 
 ---
 
-## Getting started
+## Installation
 
 Download the release for your system, or build it from source.
 
@@ -73,8 +70,10 @@ Download the release for your system, or build it from source.
 
 ## Configuration
 
-LSProxy uses a configuration file located at:
+LSProxy uses the following configuration hierarchy: if the top configuration file is present, use that configuration. Use one configuration file at a time. If an option is not present and the next config file contains it, that option will not be used.
+
 ```
+<project-directory>/lsproxy.toml
 ~/.config/lsproxy/lsproxy.toml
 ```
 

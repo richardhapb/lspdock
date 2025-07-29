@@ -41,7 +41,7 @@ pub fn redirect_uri(
 
 // When calling the textDocument/definition method, if the library is external, a different path is used.
 // We need to:
-// 1. Identify if the method is textDocument/definition (TODO: research if another method is required)
+// 1. Identify if the method is "textDocument/definition", "textDocument/declaration", "textDocument/typeDefinition" (TODO: research if another method is required)
 // 2. Capture the path.
 // 3. Copy the file to a temporary file locally
 // 4. Redirect the URI to the new temporary file.
@@ -98,16 +98,17 @@ impl RequestTracker {
     }
 
     async fn take_if_match(&self, id: u64, expected: &str) -> bool {
-        self.map
-            .write()
-            .await
-            .remove(&id)
-            .map(|m| m == expected)
-            .unwrap_or(false)
+        let mut map = self.map.write().await;
+        let exists = map.get(&id).map(|m| m == expected).unwrap_or(false);
+        if exists {
+            map.remove(&id);
+        }
+        exists
     }
 
-    pub async fn check_for_definition_method(
+    pub async fn check_for_methods(
         &self,
+        methods: &[&str],
         raw_str: &mut String,
         pair: &Pair,
     ) -> std::io::Result<()> {
@@ -116,33 +117,40 @@ impl RequestTracker {
             return Ok(());
         }
 
+        //textDocument/declaration
+
         match pair {
             Pair::Server => {
                 let mut v: Value = serde_json::from_str(&raw_str)?;
 
                 // Check if this is a response to a tracked request
                 if let Some(id) = v.get("id").and_then(Value::as_u64) {
-                    debug!("Checking for definition method");
+                    for method in methods {
+                        debug!("Checking for {method} method");
 
-                    let matches = self.take_if_match(id, "textDocument/definition").await;
-                    debug!(%matches);
-                    if matches {
-                        trace!(%id, "matches");
-                        if let Some(results) = v.get_mut("result").and_then(Value::as_array_mut) {
-                            trace!(?results);
-                            for result in results {
-                                if let Some(uri_val) = result.get("uri").and_then(|u| u.as_str()) {
-                                    if !(uri_val.contains(&self.config.pattern)) {
-                                        debug!(%uri_val);
-                                        let new_uri =
-                                            self.bind_library(uri_val.to_string()).await?;
-                                        debug!("file://{}", new_uri);
+                        let matches = self.take_if_match(id, *method).await;
+                        debug!(%matches);
+                        if matches {
+                            trace!(%id, "matches");
+                            if let Some(results) = v.get_mut("result").and_then(Value::as_array_mut)
+                            {
+                                trace!(?results);
+                                for result in results {
+                                    if let Some(uri_val) =
+                                        result.get("uri").and_then(|u| u.as_str())
+                                    {
+                                        if !(uri_val.contains(&self.config.pattern)) {
+                                            debug!(%uri_val);
+                                            let new_uri =
+                                                self.bind_library(uri_val.to_string()).await?;
+                                            debug!("file://{}", new_uri);
 
-                                        Self::modify_uri(result, &new_uri);
+                                            Self::modify_uri(result, &new_uri);
+                                        }
                                     }
                                 }
+                                *raw_str = v.to_string(); // write back the modified JSON
                             }
-                            *raw_str = v.to_string(); // write back the modified JSON
                         }
                     }
                 }
@@ -155,12 +163,14 @@ impl RequestTracker {
                 if let Some(id) = v.get("id").and_then(Value::as_u64) {
                     debug!(%id);
 
-                    if let Some(method) = v.get("method").and_then(Value::as_str) {
-                        trace!(%method);
-                        // Only track "textDocument/definition" if URI matches
-                        if method == "textDocument/definition" {
-                            debug!(%id, "Storing");
-                            self.track(id, method).await;
+                    if let Some(req_method) = v.get("method").and_then(Value::as_str) {
+                        trace!(%req_method);
+                        // Only track expected methods if URI matches
+                        for method in methods {
+                            if req_method == *method {
+                                debug!(%id, "Storing");
+                                self.track(id, *method).await;
+                            }
                         }
                     }
                 }

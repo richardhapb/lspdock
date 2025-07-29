@@ -11,6 +11,8 @@ use tracing::{Instrument, Level, debug, error, info, span, trace};
 
 use crate::config::ProxyConfig;
 
+const GOTO_METHODS: &[&str] = &["textDocument/definition", "textDocument/declaration", "textDocument/typeDefinition"];
+
 #[derive(Debug)]
 pub enum Pair {
     Server,
@@ -142,7 +144,7 @@ where
 
                                     if config_clone.use_docker {
                                         redirect_uri(&mut msg, &pair, &config_clone)?;
-                                        tracker_inner.check_for_definition_method(&mut msg, &pair).await?;
+                                        tracker_inner.check_for_methods(GOTO_METHODS, &mut msg, &pair).await?;
                                     }
                                     send_message(&mut writer, msg).await.map_err(|e| {
                                         error!("Failed to forward the request: {}", e);

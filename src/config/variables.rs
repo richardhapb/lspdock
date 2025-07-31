@@ -132,6 +132,7 @@ mod tests {
             pattern: "$HOME/dev".into(),
             log_level: None,
             executable: "rust_analyzer".into(),
+            patch_pid: None,
             use_docker: false,
         };
 

@@ -39,13 +39,17 @@ pub struct ProxyConfig {
     pub container: String,
     pub local_path: String,
     pub docker_internal_path: String,
-    pub log_level: Option<String>,
     pub executable: String,
     /// This serves as a pattern for the proxy to Docker; if the pattern doesn't match, the proxy will
     /// forward requests directly to the local LSP.
     pub pattern: String,
     #[serde(skip)]
     pub use_docker: bool,
+
+    /// Indicates whether to patch the PID to null; this is used when the LSP tries to track the IDE and
+    /// auto-kill when it can't detect it.
+    pub patch_pid: Option<bool>,
+    pub log_level: Option<String>,
 }
 
 impl ProxyConfig {

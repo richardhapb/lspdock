@@ -95,11 +95,37 @@ executable = "rust-analyzer"
 # Pattern to determine if Docker should be used
 pattern = "/usr/src/app"
 
+# Optional: Controls PID handling for LSP servers that track client processes
+# Set to true if your LSP server auto-terminates when it can't detect the client process
+# For example: true for Pyright, false for Ruff LSP
+patch_pid = true
+
 # Optional: Log level; default is info
 log_level = "debug"
 ```
 
 If the pattern is not present in the current working directory, the proxy acts as the target LSP, without changing any messages, and redirects it directly. Also, the logs of the messages continue to be captured and written to the log file.
+
+### PID Patching Explained
+
+Some LSP servers attempt to monitor the client's process ID (PID) and automatically terminate when they can't detect the client. This behavior can cause problems in containerized environments where PIDs don't match between the host and container.
+
+- **When to use `patch_pid = true`**:
+  - If your LSP server unexpectedly terminates during use
+  - For servers like Pyright that actively track the client process
+  - When using Docker, where the host PID is not visible inside the container
+
+- **When to use `patch_pid = false` or omit**:
+  - For LSP servers that don't monitor the client process
+  - For servers like Ruff LSP that don't auto-terminate
+  - When running LSP servers locally (not in containers)
+
+When `patch_pid = true`, LSProxy will:
+1. Remove the PID from requests to the LSP server
+2. Monitor the editor's process itself
+3. Properly shut down the LSP server when you close your editor
+
+This feature ensures a smooth experience with LSP servers that would otherwise terminate prematurely when they can't detect your editor's process.
 
 ### Available Variables
 
@@ -151,6 +177,7 @@ tail -f /tmp/lsproxy_trace.log
 - [x] Generate the configuration hierarchy
 - [x] Handle navigating LSP response like `textDocument/definition` in the local environment
 - [x] Redirect URIs between Docker container and Host environment
+- [x] Implement PID monitoring for the IDE
 - [ ] Use two LSPs in the same project
 
 ---

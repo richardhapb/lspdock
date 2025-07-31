@@ -146,6 +146,15 @@ tail -f /tmp/lsproxy_trace.log
 
 ---
 
+## Road Map
+
+- [x] Generate the configuration hierarchy
+- [x] Handle navigating LSP response like `textDocument/definition` in the local environment
+- [x] Redirect URIs between Docker container and Host environment
+- [ ] Use two LSPs in the same project
+
+---
+
 ## Troubleshooting
 
 ### Common Issues

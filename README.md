@@ -104,7 +104,7 @@ patch_pid = true
 log_level = "debug"
 ```
 
-If the pattern is not present in the current working directory, the proxy acts as the target LSP, without changing any messages, and redirects it directly. Also, the logs of the messages continue to be captured and written to the log file.
+If the pattern is not present in the current working directory, the proxy acts as the target LSP, without changing anything, and redirects it directly. Also, the logs of the messages continue to be captured and written to the log file.
 
 ### PID Patching Explained
 

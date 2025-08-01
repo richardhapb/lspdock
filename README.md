@@ -90,14 +90,15 @@ docker_internal_path = "/usr/src/app"
 local_path = "/Users/richard/dev/project"
 
 # Executable for the LSP server
-executable = "rust-analyzer"
+executable = "pyright-langserver"
 
 # Pattern to determine if Docker should be used
 pattern = "/usr/src/app"
 
-# Optional: Controls PID handling for LSP servers that track client processes
+# Optional (default is false): Controls PID handling for LSP servers that track client processes
 # Set to true if your LSP server auto-terminates when it can't detect the client process
 # For example: true for Pyright, false for Ruff LSP
+# The LSPs based on vscode-languageserver-node require this patch because of this implementation: https://github.com/microsoft/vscode-languageserver-node/blob/df56e720c01c6e2d7873733807418f6ce33187ad/server/src/node/main.ts#L80-L106
 patch_pid = true
 
 # Optional: Log level; default is info

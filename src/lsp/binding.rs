@@ -6,7 +6,7 @@ use tokio::{
     io::AsyncWriteExt,
     process::Command,
 };
-use tracing::{debug, trace};
+use tracing::{debug, error, trace};
 
 use std::collections::HashMap;
 use tokio::sync::RwLock;
@@ -205,6 +205,12 @@ impl RequestTracker {
 
     /// Copies a file from either the local filesystem or a Docker container.
     async fn copy_file(&self, path: String, destination: &str) -> std::io::Result<()> {
+        let destination_path = PathBuf::from(destination);
+        if destination_path.exists() {
+            debug!("File already exists, skipping copy. {}", destination);
+            return Ok(());
+        }
+
         // Only copy the file if the LSP is in a container
         debug!("Starting file copy from {} to {}", path, destination);
         let cmd = Command::new("docker")
@@ -219,7 +225,7 @@ impl RequestTracker {
 
         if !status.status.success() {
             let stderr = String::from_utf8_lossy(&status.stderr);
-            tracing::error!("Command failed with status {}: {}", status.status, stderr);
+            error!("Command failed with status {}: {}", status.status, stderr);
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 format!("command failed: {}", stderr),

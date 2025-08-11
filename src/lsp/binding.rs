@@ -182,35 +182,45 @@ impl RequestTracker {
 
     async fn bind_library(&self, uri: String) -> std::io::Result<String> {
         let temp_dir = std::env::temp_dir().join("lsproxy");
+        trace!(temp_dir=%temp_dir.to_string_lossy());
 
         let safe_path = PathBuf::from(uri.strip_prefix("file://").unwrap_or(&uri));
-        let file_name = safe_path
-            .file_name()
-            .unwrap_or_else(|| std::ffi::OsStr::new("unnamed"))
-            .to_string_lossy();
+        let safe_path = safe_path.to_string_lossy();
 
-        let temp_uri = temp_dir.join(file_name.to_string());
+        debug!(%safe_path);
+        // If the file is in the temp dir used as a binding, means that the editor called to the LSP
+        // method from that file, then we don't want to recalculate the path, use it directly instead
+        let temp_uri = if safe_path.contains(&temp_dir.to_string_lossy().to_string()) {
+            PathBuf::from(safe_path.to_string())
+        } else {
+            let relative_path = safe_path.strip_prefix("/").unwrap_or(&safe_path);
+            trace!(%relative_path);
+            let tmp_file_path = relative_path.to_string();
+            temp_dir.join(tmp_file_path)
+        };
 
         // Create the directories if they do not exist
         if let Some(parent) = temp_uri.parent() {
+            trace!(dir=%parent.to_string_lossy(), "creating directories");
             create_dir_all(parent).await?;
         }
-        let temp_uri = temp_uri.to_string_lossy().to_string();
-        let safe_path = safe_path.to_string_lossy().to_string();
 
-        self.copy_file(safe_path, &temp_uri).await?;
+        let temp_uri = temp_uri.to_string_lossy().to_string();
+        trace!(%temp_uri);
+
+        let temp_uri_path = PathBuf::from(&temp_uri);
+        debug!(%temp_uri);
+        if !temp_uri_path.exists() {
+            self.copy_file(safe_path.to_string(), &temp_uri).await?;
+        } else {
+            debug!("File already exists, skipping copy. {}", temp_uri);
+        }
 
         Ok(temp_uri)
     }
 
     /// Copies a file from either the local filesystem or a Docker container.
     async fn copy_file(&self, path: String, destination: &str) -> std::io::Result<()> {
-        let destination_path = PathBuf::from(destination);
-        if destination_path.exists() {
-            debug!("File already exists, skipping copy. {}", destination);
-            return Ok(());
-        }
-
         // Only copy the file if the LSP is in a container
         debug!("Starting file copy from {} to {}", path, destination);
         let cmd = Command::new("docker")

@@ -14,6 +14,8 @@ use crate::config::ProxyConfig;
 const GOTO_METHODS: &[&str] = &["textDocument/definition", "textDocument/declaration", "textDocument/typeDefinition"];
 // This prevents an infinite loop if the LSP or the IDE doesn't respond correctly
 const MAX_EMPTY_RESPONSES_THRESHOLD: usize = 15;
+// Seconds to wait for each iteration after the threshold is reached
+const SECONDS_AFTER_THRESHOLD: u64 = 30;
 
 #[derive(Debug)]
 pub enum Pair {
@@ -141,8 +143,8 @@ where
                                 };
 
                                 if empty_counter >= MAX_EMPTY_RESPONSES_THRESHOLD {
-                                    info!("The empty response has reached the threshold; exiting");
-                                    break;
+                                    info!("The empty response has reached the threshold; waiting {SECONDS_AFTER_THRESHOLD} seconds");
+                                    tokio::time::sleep(Duration::from_secs(SECONDS_AFTER_THRESHOLD)).await;
                                 }
 
                                 for mut msg in msgs {

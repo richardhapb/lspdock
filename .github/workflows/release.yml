@@ -12,14 +12,10 @@ jobs:
     strategy:
       matrix:
         include:
-          # Linux (GNU) via cross (keep if you need glibc)
+          # Linux (GNU) via cross
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             use_cross: true
-          # Or prefer MUSL to avoid glibc headaches:
-          # - target: x86_64-unknown-linux-musl
-          #   runner: ubuntu-latest
-          #   use_cross: true
 
           # Windows (GNU) via cross
           - target: x86_64-pc-windows-gnu

@@ -51,31 +51,31 @@ pub fn redirect_uri(
 //
 // Response from server when textDocument/definition is called:
 //
-// IDE to Server: lsproxy::lsp::parser: Sending message len=177
-// IDE to Server: lsproxy::lsp::parser: {"id":4,"method":"textDocument/definition","jsonrpc":"2.0","params":{"textDocument":{"uri":"file:///usr/src/app/dirtystroke/settings.py"},"position":{"character":13,"line":15}}}
-// Server to IDE: lsproxy::lsp::parser: Raw headers headers_str=Content-Length: 190
-// Server to IDE: lsproxy::lsp::parser: Processing header line: 'Content-Length: 190'
-// Server to IDE: lsproxy::lsp::parser: Header key: 'Content-Length', value: '190'
-// Server to IDE: lsproxy::lsp::parser: Reading body content_length=190
-// Server to IDE: lsproxy::lsp::parser: body={"jsonrpc":"2.0","id":4,"result":[{"uri":"file:///usr/local/lib/python3.12/site-packages/django/conf/__init__.py","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}}}]}
+// IDE to Server: lspdock::lsp::parser: Sending message len=177
+// IDE to Server: lspdock::lsp::parser: {"id":4,"method":"textDocument/definition","jsonrpc":"2.0","params":{"textDocument":{"uri":"file:///usr/src/app/dirtystroke/settings.py"},"position":{"character":13,"line":15}}}
+// Server to IDE: lspdock::lsp::parser: Raw headers headers_str=Content-Length: 190
+// Server to IDE: lspdock::lsp::parser: Processing header line: 'Content-Length: 190'
+// Server to IDE: lspdock::lsp::parser: Header key: 'Content-Length', value: '190'
+// Server to IDE: lspdock::lsp::parser: Reading body content_length=190
+// Server to IDE: lspdock::lsp::parser: body={"jsonrpc":"2.0","id":4,"result":[{"uri":"file:///usr/local/lib/python3.12/site-packages/django/conf/__init__.py","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}}}]}
 //
 // HERE WE NEED TO COPY THE FILE
 //
-// Server to IDE: lsproxy::proxy::io: Read message from LSP
-// Server to IDE: lsproxy::proxy::io: Incoming message from LSP
-// Server to IDE: lsproxy::lsp::parser: Sending message len=190
+// Server to IDE: lspdock::proxy::io: Read message from LSP
+// Server to IDE: lspdock::proxy::io: Incoming message from LSP
+// Server to IDE: lspdock::lsp::parser: Sending message len=190
 //
 // THEN SEND THE MODIFIED PATH TO TEMPORARY FILE
-// Server to IDE: lsproxy::lsp::parser: {"jsonrpc":"2.0","id":4,"result":[{"uri":"file:///usr/local/lib/python3.12/site-packages/django/conf/__init__.py","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}}}]}
+// Server to IDE: lspdock::lsp::parser: {"jsonrpc":"2.0","id":4,"result":[{"uri":"file:///usr/local/lib/python3.12/site-packages/django/conf/__init__.py","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}}}]}
 //
 // LIKE
-// Server to IDE: lsproxy::lsp::parser: {"jsonrpc":"2.0","id":4,"result":[{"uri":"file:///tmp/lsproxy/django/conf/__init__.py","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}}}]}
+// Server to IDE: lspdock::lsp::parser: {"jsonrpc":"2.0","id":4,"result":[{"uri":"file:///tmp/lsproxy/django/conf/__init__.py","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}}}]}
 //
 // THE CLIENT INIT AGAIN THE PROXY FOR ANOTHER ENVIRONMENT??
 //
-// lsproxy: Connecting to LSP config.container=development-web-1 cmd_args=["exec", "-i", "--workdir", "/usr/src/app", "development-web-1", "pyright-langserver"]
-// lsproxy: args received args=Args { inner: ["/Users/richard/proj/lsproxy/target/debug/lsproxy", "--stdio"] }
-// lsproxy: full command cmd_args=["exec", "-i", "--workdir", "/usr/src/app", "development-web-1", "pyright-lan
+// lspdock: Connecting to LSP config.container=development-web-1 cmd_args=["exec", "-i", "--workdir", "/usr/src/app", "development-web-1", "pyright-langserver"]
+// lspdock: args received args=Args { inner: ["/Users/richard/proj/lsproxy/target/debug/lsproxy", "--stdio"] }
+// lspdock: full command cmd_args=["exec", "-i", "--workdir", "/usr/src/app", "development-web-1", "pyright-lan
 
 /// Track the definition method related requests for interchanging URIs and handling different requests.
 /// Cloning is cheap, O(1).
@@ -181,7 +181,7 @@ impl RequestTracker {
     }
 
     async fn bind_library(&self, uri: String) -> std::io::Result<String> {
-        let temp_dir = std::env::temp_dir().join("lsproxy");
+        let temp_dir = std::env::temp_dir().join("lspdock");
         trace!(temp_dir=%temp_dir.to_string_lossy());
 
         let safe_path = PathBuf::from(uri.strip_prefix("file://").unwrap_or(&uri));

@@ -66,7 +66,7 @@ jobs:
       - name: Package artifact
         run: |
           mkdir -p dist
-          BIN=lsproxy
+          BIN=lspdock
           EXT=""
           ARCHIVE_EXT="tar.gz"
           if [[ "${{ matrix.target }}" == *windows* ]]; then
@@ -85,8 +85,8 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lsproxy-${{ matrix.target }}
-          path: dist/lsproxy-${{ matrix.target }}.*
+          name: lspdock-${{ matrix.target }}
+          path: dist/lspdock-${{ matrix.target }}.*
 
   release:
     needs: build

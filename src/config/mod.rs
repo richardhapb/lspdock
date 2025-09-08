@@ -5,7 +5,7 @@ use std::{env::current_dir, path::PathBuf};
 
 pub use provider::ProxyConfig;
 
-const CONFIG_NAME: &str = "lsproxy.toml";
+const CONFIG_NAME: &str = "lspdock.toml";
 
 /// Get the configuration using the hierarchy order:
 ///
@@ -19,7 +19,7 @@ pub fn resolve_config_path() -> std::io::Result<PathBuf> {
     }
 
     let home = dirs::home_dir().unwrap_or(PathBuf::new());
-    let home_config = home.join(".config").join("lsproxy").join(CONFIG_NAME);
+    let home_config = home.join(".config").join("lspdock").join(CONFIG_NAME);
 
     if home_config.exists() {
         return Ok(home_config);

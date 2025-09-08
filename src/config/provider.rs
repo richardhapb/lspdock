@@ -47,8 +47,8 @@ pub struct ProxyConfig {
     pub use_docker: bool,
 
     /// Indicates whether to patch the PID to null; this is used when the LSP tries to track the IDE and
-    /// auto-kill when it can't detect it.
-    pub patch_pid: Option<bool>,
+    /// auto-kill when it can't detect it. The listed executables in this list will be patched
+    pub patch_pid: Option<Vec<String>>,
     pub log_level: Option<String>,
 }
 
@@ -79,6 +79,18 @@ impl ProxyConfig {
         config.use_docker = cwd.contains(&config.pattern);
 
         Ok(config)
+    }
+
+    pub fn update_executable(&mut self, exec: String) {
+        self.executable = exec
+    }
+
+    /// Indicate if the executable requires patch to the pid
+    pub fn requires_patch_pid(&self) -> bool {
+        match &self.patch_pid {
+            Some(patch_pid) => patch_pid.contains(&self.executable),
+            None => false
+        }
     }
 }
 

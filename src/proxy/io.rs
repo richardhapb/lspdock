@@ -148,7 +148,7 @@ where
                                 }
 
                                 for mut msg in msgs {
-                                    if config_clone.patch_pid.unwrap_or(false) {
+                                    if config_clone.requires_patch_pid() {
                                         if let Some(ref mut pid_handler_ref) = pid_handler {
                                             trace!("Trying to take the PID from the initialize method");
                                             // The function returns true if the take succeeds

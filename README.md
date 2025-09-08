@@ -1,30 +1,30 @@
-# LSProxy
+# LSPDock
 
-LSProxy is a lightweight Language Server Protocol (LSP) proxy designed to facilitate communication between IDEs and LSP servers. It supports dynamic path redirection, Docker integration, and configuration-based customization. LSProxy ensures seamless communication between your IDE and LSP server, even when the server is running inside a Docker container.
+LSPDock is a lightweight Language Server Protocol (LSP) proxy designed to facilitate communication between IDEs and LSP servers. It supports dynamic path redirection, Docker integration, and configuration-based customization. LSPDock ensures seamless communication between your IDE and LSP server, even when the server is running inside a Docker container.
 
 ```mermaid
 flowchart TD
-    subgraph Without LSProxy
+    subgraph Without LSPDock
         IDE -.->|Path mismatch| LSP
         LSP["LSP Server (Inside Docker)"] -->|Path mismatch| IDE["IDE (Client)"]
     end
 
-    subgraph With LSProxy
-        IDE2["IDE (Client)"] --> LSProxy["LSProxy (Proxy)"]
-        LSProxy["LSProxy (Proxy)"] -->|Path redirection| IDE2["IDE (Client)"]
-        LSP2["LSP Server (Inside Docker)"] --> LSProxy
-        LSProxy -.->|Path redirection| LSP2
+    subgraph With LSPDock
+        IDE2["IDE (Client)"] --> LSPDock["LSProxy (Proxy)"]
+        LSPDock["LSProxy (Proxy)"] -->|Path redirection| IDE2["IDE (Client)"]
+        LSP2["LSP Server (Inside Docker)"] --> LSPDock
+        LSPDock -.->|Path redirection| LSP2
     end
 ```
 
 ### Explanation:
-1. **Without LSProxy**:
+1. **Without LSPDock**:
    - The IDE communicates directly with the LSP server inside Docker.
    - Path mismatches between the host and container can cause issues, breaking the communication.
 
-2. **With LSProxy**:
-   - LSProxy acts as a middle layer between the IDE and the LSP server.
-   - LSProxy dynamically redirects paths, ensuring seamless communication between the IDE and the LSP server inside Docker.
+2. **With LSPDock**:
+   - LSPDock acts as a middle layer between the IDE and the LSP server.
+   - LSPDock dynamically redirects paths, ensuring seamless communication between the IDE and the LSP server inside Docker.
 
 ---
 
@@ -52,8 +52,8 @@ Download the release for your system, or build it from source.
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/richardhapb/lsproxy.git
-   cd lsproxy
+   git clone https://github.com/richardhapb/lspdock.git
+   cd lspdock
    ```
 
 2. Build the project:
@@ -63,18 +63,18 @@ Download the release for your system, or build it from source.
 
 3. Install the binary:
    ```bash
-   cp target/release/lsproxy /usr/local/bin/
+   cp target/release/lspdock /usr/local/bin/
    ```
 
 ---
 
 ## Configuration
 
-LSProxy uses the following configuration hierarchy: if the top configuration file is present, use that configuration. Use one configuration file at a time. If an option is not present and the next config file contains it, that option will not be used.
+LSPDock uses the following configuration hierarchy: if the top configuration file is present, use that configuration. Use one configuration file at a time. If an option is not present and the next config file contains it, that option will not be used.
 
 ```
-<project-directory>/lsproxy.toml
-~/.config/lsproxy/lsproxy.toml
+<project-directory>/lspdock.toml
+~/.config/lspdock/lsproxy.toml
 ```
 
 ### Example Configuration
@@ -89,17 +89,17 @@ docker_internal_path = "/usr/src/app"
 # Path on the host machine
 local_path = "/Users/richard/dev/project"
 
-# Executable for the LSP server
+# Executable for the LSP server (this will be overwritten if the --exec arg is passed)
 executable = "pyright-langserver"
 
 # Pattern to determine if Docker should be used
 pattern = "/usr/src/app"
 
-# Optional (default is false): Controls PID handling for LSP servers that track client processes
-# Set to true if your LSP server auto-terminates when it can't detect the client process
-# For example: true for Pyright, false for Ruff LSP
+# Optional: Controls PID handling for LSP servers that track client processes
+# List here your LSP server if it auto-terminates when it can't detect the client process
+# For example: pyright-langserver, false for anything else
 # The LSPs based on vscode-languageserver-node require this patch because of this implementation: https://github.com/microsoft/vscode-languageserver-node/blob/df56e720c01c6e2d7873733807418f6ce33187ad/server/src/node/main.ts#L80-L106
-patch_pid = true
+patch_pid = ["pyright-langserver"]
 
 # Optional: Log level; default is info
 log_level = "debug"
@@ -121,22 +121,39 @@ Some LSP servers attempt to monitor the client's process ID (PID) and automatica
   - For servers like Ruff LSP that don't auto-terminate
   - When running LSP servers locally (not in containers)
 
-When `patch_pid = true`, LSProxy will:
+When `patch_pid = true`, LSPDock will:
 1. Remove the PID from requests to the LSP server
 2. Monitor the editor's process itself
 3. Properly shut down the LSP server when you close your editor
 
 This feature ensures a smooth experience with LSP servers that would otherwise terminate prematurely when they can't detect your editor's process.
 
+### Handle multiple LSPs for the same project
+
+To handle different LSPs for the same project, the trick is to pass the `--exec` argument to `lspdock`. This argument must be the first and has the following format:
+
+```text
+lspdock --exec [executable-name] {LSP's arguments}
+```
+
+Examples:
+
+```bash
+lspdock --exec pyright-langserver --stdio
+lspdock --exec ruff server
+```
+
+To handle this, you should customize your IDE's command to pass the `--exec` argument; this argument will override the `executable` parameter in the config file.
+
 ### Available Variables
 
-LSProxy supports dynamic variables that can be used in the configuration file:
+LSPDock supports dynamic variables that can be used in the configuration file:
 
 - **`$CWD`**: Current working directory.
 - **`$PARENT`**: Parent directory of the current working directory. For example, `/path/to/project`, where $PARENT resolves to `project`.
 - **`$HOME`**: Home directory of the user.
 
-These variables will be automatically expanded when LSProxy reads the configuration file.
+These variables will be automatically expanded when LSPDock reads the configuration file.
 
 #### Example with Variables
 
@@ -154,21 +171,21 @@ pattern = "$HOME/dev"
 
 Refer to the [IDEs configuration guide](ides.md) for detailed configuration steps.
 
-### Running LSProxy
+### Running LSPDock
 
-1. Start LSProxy:
+1. Start LSPDock:
    ```bash
-   lsproxy
+   lspdock
    ```
 
-2. LSProxy will automatically read the configuration file and start the LSP server. If the `pattern` matches the current working directory, LSProxy will use Docker; otherwise, it will run the LSP server directly.
+2. LSPDock will automatically read the configuration file and start the LSP server. If the `pattern` matches the current working directory, LSProxy will use Docker; otherwise, it will run the LSP server directly.
 
 ### Logs
 
-Logs are written to a temporary directory. On Unix systems, this is located at `/tmp/lsproxy_trace.log`, and on Windows, it is located at `C:/Windows/Temp`. You can monitor the logs for debugging:
+Logs are written to a temporary directory. On Unix systems, this is located at `/tmp/lspdock_trace.log`, and on Windows, it is located at `C:/Windows/Temp`. You can monitor the logs for debugging:
 
 ```bash
-tail -f /tmp/lsproxy_trace.log
+tail -f /tmp/lspdock_trace.log
 ```
 
 ---
@@ -179,7 +196,7 @@ tail -f /tmp/lsproxy_trace.log
 - [x] Handle navigating LSP response like `textDocument/definition` in the local environment
 - [x] Redirect URIs between Docker container and Host environment
 - [x] Implement PID monitoring for the IDE
-- [ ] Use two LSPs in the same project
+- [x] Use two LSPs in the same project
 
 ---
 
@@ -188,7 +205,7 @@ tail -f /tmp/lsproxy_trace.log
 ### Common Issues
 
 1. **Configuration File Not Found**:
-   Ensure the configuration file exists at `~/.config/lsproxy/lsproxy.toml`.
+   Ensure the configuration file exists at `~/.config/lspdock/lsproxy.toml`.
 
 2. **Docker Not Found**:
    Install Docker and ensure the target container is running.

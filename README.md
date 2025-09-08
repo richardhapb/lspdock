@@ -10,8 +10,8 @@ flowchart TD
     end
 
     subgraph With LSPDock
-        IDE2["IDE (Client)"] --> LSPDock["LSProxy (Proxy)"]
-        LSPDock["LSProxy (Proxy)"] -->|Path redirection| IDE2["IDE (Client)"]
+        IDE2["IDE (Client)"] --> LSPDock["LSPDock (Proxy)"]
+        LSPDock["LSPDock (Proxy)"] -->|Path redirection| IDE2["IDE (Client)"]
         LSP2["LSP Server (Inside Docker)"] --> LSPDock
         LSPDock -.->|Path redirection| LSP2
     end
@@ -74,7 +74,7 @@ LSPDock uses the following configuration hierarchy: if the top configuration fil
 
 ```
 <project-directory>/lspdock.toml
-~/.config/lspdock/lsproxy.toml
+~/.config/lspdock/lspdock.toml
 ```
 
 ### Example Configuration
@@ -178,7 +178,7 @@ Refer to the [IDEs configuration guide](ides.md) for detailed configuration step
    lspdock
    ```
 
-2. LSPDock will automatically read the configuration file and start the LSP server. If the `pattern` matches the current working directory, LSProxy will use Docker; otherwise, it will run the LSP server directly.
+2. LSPDock will automatically read the configuration file and start the LSP server. If the `pattern` matches the current working directory, LSPDock will use Docker; otherwise, it will run the LSP server directly.
 
 ### Logs
 
@@ -205,7 +205,7 @@ tail -f /tmp/lspdock_trace.log
 ### Common Issues
 
 1. **Configuration File Not Found**:
-   Ensure the configuration file exists at `~/.config/lspdock/lsproxy.toml`.
+   Ensure the configuration file exists at `~/.config/lspdock/lspdock.toml`.
 
 2. **Docker Not Found**:
    Install Docker and ensure the target container is running.

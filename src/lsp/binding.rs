@@ -69,12 +69,13 @@ pub fn redirect_uri(
 // Server to IDE: lspdock::lsp::parser: {"jsonrpc":"2.0","id":4,"result":[{"uri":"file:///usr/local/lib/python3.12/site-packages/django/conf/__init__.py","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}}}]}
 //
 // LIKE
-// Server to IDE: lspdock::lsp::parser: {"jsonrpc":"2.0","id":4,"result":[{"uri":"file:///tmp/lsproxy/django/conf/__init__.py","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}}}]}
+// Server to IDE: lspdock::lsp::parser:
+// {"jsonrpc":"2.0","id":4,"result":[{"uri":"file:///tmp/lspdock/django/conf/__init__.py","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}}}]}
 //
 // THE CLIENT INIT AGAIN THE PROXY FOR ANOTHER ENVIRONMENT??
 //
 // lspdock: Connecting to LSP config.container=development-web-1 cmd_args=["exec", "-i", "--workdir", "/usr/src/app", "development-web-1", "pyright-langserver"]
-// lspdock: args received args=Args { inner: ["/Users/richard/proj/lsproxy/target/debug/lsproxy", "--stdio"] }
+// lspdock: args received args=Args { inner: ["/Users/richard/proj/lspdock/target/debug/lsproxy", "--stdio"] }
 // lspdock: full command cmd_args=["exec", "-i", "--workdir", "/usr/src/app", "development-web-1", "pyright-lan
 
 /// Track the definition method related requests for interchanging URIs and handling different requests.

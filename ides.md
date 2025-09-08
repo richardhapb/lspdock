@@ -100,7 +100,7 @@ If your IDE supports configuring an external Language Server Protocol (LSP), you
    - If your IDE allows passing arguments to the LSP server, ensure the arguments are forwarded correctly. LSPDock will automatically forward them to the underlying LSP server.
 
 4. **Configure LSPDock**:
-   - Ensure LSPDock is configured correctly in `~/.config/lspdock/lsproxy.toml`. For example:
+   - Ensure LSPDock is configured correctly in `~/.config/lspdock/lspdock.toml`. For example:
      ```toml
      container = "my-container"
      docker_internal_path = "/usr/src/app"
@@ -124,5 +124,5 @@ If your IDE supports configuring an external Language Server Protocol (LSP), you
 
 ---
 
-With these steps, LSPDock should work seamlessly with Neovim, VSCode, and other IDEs that support LSP. If you encounter issues, refer to the troubleshooting section in the README or open an issue on the LSProxy repository.
+With these steps, LSPDock should work seamlessly with Neovim, VSCode, and other IDEs that support LSP. If you encounter issues, refer to the troubleshooting section in the README or open an issue on the LSPDock repository.
 

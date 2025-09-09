@@ -75,7 +75,9 @@ impl PidHandler {
             system.process(target_pid).is_some()
         } else {
             warn!("No PID for capturing");
-            false
+            // By default indicate that the IDE is running because
+            // We can't know if it is running
+            true
         }
     }
 }

@@ -5,11 +5,13 @@ LSPDock is a lightweight Language Server Protocol (LSP) proxy designed to facili
 ```mermaid
 flowchart TD
     subgraph Without LSPDock
+        direction TB
         IDE -.->|Path mismatch| LSP
         LSP["LSP Server (Inside Docker)"] -->|Path mismatch| IDE["IDE (Client)"]
     end
 
     subgraph With LSPDock
+        direction TB
         IDE2["IDE (Client)"] --> LSPDock["LSPDock (Proxy)"]
         LSPDock["LSPDock (Proxy)"] -->|Path redirection| IDE2["IDE (Client)"]
         LSP2["LSP Server (Inside Docker)"] --> LSPDock
@@ -111,17 +113,17 @@ If the pattern is not present in the current working directory, the proxy acts a
 
 Some LSP servers attempt to monitor the client's process ID (PID) and automatically terminate when they can't detect the client. This behavior can cause problems in containerized environments where PIDs don't match between the host and container.
 
-- **When to use `patch_pid = true`**:
+- **When to use `patch_pid`**:
   - If your LSP server unexpectedly terminates during use
   - For servers like Pyright that actively track the client process
   - When using Docker, where the host PID is not visible inside the container
 
-- **When to use `patch_pid = false` or omit**:
+- **When not to use `patch_pid = false` or omit:**
   - For LSP servers that don't monitor the client process
   - For servers like Ruff LSP that don't auto-terminate
   - When running LSP servers locally (not in containers)
 
-When `patch_pid = true`, LSPDock will:
+When `patch_pid` is configured, LSPDock will:
 1. Remove the PID from requests to the LSP server
 2. Monitor the editor's process itself
 3. Properly shut down the LSP server when you close your editor
@@ -144,6 +146,8 @@ lspdock --exec ruff server
 ```
 
 To handle this, you should customize your IDE's command to pass the `--exec` argument; this argument will override the `executable` parameter in the config file.
+
+See the [neovim example](nvim_example.md) for a custom use of multiple LSPs using Neovim.
 
 ### Available Variables
 
@@ -169,7 +173,7 @@ pattern = "$HOME/dev"
 
 ## Usage
 
-Refer to the [IDEs configuration guide](ides.md) for detailed configuration steps.
+Refer to the [IDEs configuration guide](ides.md) for detailed configuration steps. For using Neovim you can see the [neovim example](nvim_example.md).
 
 ### Running LSPDock
 
@@ -196,7 +200,8 @@ tail -f /tmp/lspdock_trace.log
 - [x] Handle navigating LSP response like `textDocument/definition` in the local environment
 - [x] Redirect URIs between Docker container and Host environment
 - [x] Implement PID monitoring for the IDE
-- [x] Use two LSPs in the same project
+- [x] Use multiple LSPs in the same project
+- [ ] Use multiple in different containers
 
 ---
 

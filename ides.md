@@ -16,7 +16,7 @@ pattern = "$HOME/dev"
 
 ## Neovim
 
-Steps for Neovim 0.11.0. For another version use [nvim-lspconfig](https://github.com/neovim/nvim-lspconfig) instead.
+Steps for Neovim 0.11.0. For another version use [nvim-lspconfig](https://github.com/neovim/nvim-lspconfig) instead. Also see the specific configuration for multiple LSPs in the same container in the [neovim example](nvim_example.md).
 
 ### Steps
 

@@ -68,7 +68,7 @@ return {
   -- This is the important part
   cmd = { "lspdock", "--exec", "ruff", 'server' },
   -- Optional for verbose logs
-  cmd_env = { RUST_LOG = "none,lsdock=trace" },
+  cmd_env = { RUST_LOG = "none,lspdock=trace" },
 
   -- Normal LSP's config
   filetypes = { 'python' },

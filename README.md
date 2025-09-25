@@ -118,7 +118,7 @@ Some LSP servers attempt to monitor the client's process ID (PID) and automatica
   - For servers like Pyright that actively track the client process
   - When using Docker, where the host PID is not visible inside the container
 
-- **When not to use `patch_pid = false` or omit:**
+- **When not to use `patch_pid` or omit:**
   - For LSP servers that don't monitor the client process
   - For servers like Ruff LSP that don't auto-terminate
   - When running LSP servers locally (not in containers)
@@ -201,7 +201,7 @@ tail -f /tmp/lspdock_trace.log
 - [x] Redirect URIs between Docker container and Host environment
 - [x] Implement PID monitoring for the IDE
 - [x] Use multiple LSPs in the same project
-- [ ] Use multiple in different containers
+- [ ] Use multiple LSPs in different containers
 
 ---
 

@@ -67,9 +67,7 @@ impl ProxyConfig {
        // Normalize paths for Windows
         #[cfg(windows)]
         {
-            config.container = normalize_path(&config.container);
             config.local_path = normalize_path(&config.local_path);
-            config.docker_internal_path = normalize_path(&config.docker_internal_path);
             config.pattern = normalize_path(&config.pattern);
             config.executable = normalize_path(&config.executable);
         }

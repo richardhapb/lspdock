@@ -140,7 +140,7 @@ impl RequestTracker {
                                     if let Some(uri_val) =
                                         result.get("uri").and_then(|u| u.as_str())
                                     {
-                                        if !(uri_val.contains(&self.config.pattern)) {
+                                        if !(uri_val.contains(&self.config.local_path)) {
                                             debug!(%uri_val);
                                             let new_uri =
                                                 self.bind_library(uri_val.to_string()).await?;

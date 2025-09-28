@@ -94,25 +94,22 @@ impl VariableResolver for VariableHome {
 }
 
 fn expand_into_config(config: &mut ProxyConfig, var: &str, expanded: &str) {
+    let pattern_exists = config.pattern.is_some();
     let fields = [
         &mut config.container,
         &mut config.local_path,
         &mut config.executable,
         &mut config.docker_internal_path,
-        &mut config.pattern,
+        config.pattern.get_or_insert_with(String::new),
     ];
 
     for field in fields {
         *field = field.replace(var, expanded);
+    }
 
-        // Normalize paths for Windows
-        #[cfg(windows)]
-        {
-            let normalized = std::path::Path::new(field)
-                .to_string_lossy()
-                .replace("/", "\\");
-            *field = normalized;
-        }
+    // Restore the original pattern if it does not exist
+    if !pattern_exists {
+        config.pattern = None
     }
 }
 
@@ -129,7 +126,7 @@ mod tests {
             container: "$PARENT-web-1".into(),
             local_path: "$CWD/app".into(),
             docker_internal_path: "/some/path".into(),
-            pattern: "$HOME/dev".into(),
+            pattern: Some("$HOME/dev".into()),
             log_level: None,
             executable: "rust_analyzer".into(),
             patch_pid: None,
@@ -149,6 +146,6 @@ mod tests {
 
         assert_eq!(config.container, format!("{parent}-web-1"));
         assert_eq!(config.local_path, format!("{cwd}/app"));
-        assert_eq!(config.pattern, format!("{home}/dev"));
+        assert_eq!(config.pattern.unwrap(), format!("{home}/dev"));
     }
 }

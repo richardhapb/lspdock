@@ -1,8 +1,10 @@
-use std::{env::current_dir, error::Error, fmt::Display, path::PathBuf};
+use std::path::Path;
+use std::{env::current_dir, error::Error, fmt::Display};
 
 use serde::Deserialize;
 
 use crate::config::variables::{VariableCwd, VariableHome, VariableParent, VariableResolver};
+use crate::config::{ConfigPath, PathType};
 
 #[derive(Debug)]
 pub enum ConfigParseError {
@@ -42,7 +44,7 @@ pub struct ProxyConfig {
     pub executable: String,
     /// This serves as a pattern for the proxy to Docker; if the pattern doesn't match, the proxy will
     /// forward requests directly to the local LSP.
-    pub pattern: String,
+    pub pattern: Option<String>,
     #[serde(skip)]
     pub use_docker: bool,
 
@@ -53,8 +55,8 @@ pub struct ProxyConfig {
 }
 
 impl ProxyConfig {
-    pub fn from_file(path: &PathBuf) -> Result<Self, ConfigParseError> {
-        let file_str = std::fs::read_to_string(path)?;
+    pub fn from_file(config_path: &ConfigPath) -> Result<Self, ConfigParseError> {
+        let file_str = std::fs::read_to_string(&config_path.path)?;
         let mut config = toml::from_str(&file_str)?;
 
         let cwd_var = VariableCwd::default();
@@ -64,17 +66,13 @@ impl ProxyConfig {
         parent_var.expand(&mut config).unwrap();
         home_var.expand(&mut config).unwrap();
 
-        // Normalize paths for Windows
-        #[cfg(windows)]
-        {
-            config.local_path = normalize_path(&config.local_path);
-            config.pattern = normalize_path(&config.pattern);
-            config.executable = normalize_path(&config.executable);
-        }
-
-        let cwd = current_dir()?;
-        let cwd = cwd.to_str().expect("get current dir");
-        config.use_docker = cwd.contains(&config.pattern);
+        config.use_docker = match config_path.r#type {
+            PathType::Home => {
+                let cwd = current_dir()?;
+                cwd_matches_pattern(&cwd, config.pattern.as_deref())
+            }
+            PathType::Cwd => true, // In cwd always the pattern matches
+        };
 
         Ok(config)
     }
@@ -86,16 +84,38 @@ impl ProxyConfig {
     /// Indicate if the executable requires patch to the pid
     pub fn requires_patch_pid(&self) -> bool {
         match &self.patch_pid {
-            Some(patch_pid) => patch_pid.contains(&self.executable),
+            Some(patch_pid) => {
+                if let Some(name) = Path::new(&self.executable).file_name() {
+                    // compare against list of binaries
+                    patch_pid.contains(&name.to_string_lossy().into_owned())
+                } else {
+                    false
+                }
+            }
             None => false,
         }
     }
 }
 
-// Helper function to normalize paths
-#[cfg(windows)]
-fn normalize_path(path: &str) -> String {
-    std::path::Path::new(path)
-        .to_string_lossy()
-        .replace("/", "\\")
+fn norm_for_match<S: AsRef<str>>(s: S) -> String {
+    #[allow(unused_mut)]
+    let mut t = s.as_ref().replace('\\', "/");
+
+    #[cfg(windows)]
+    {
+        t.make_ascii_lowercase();
+    }
+
+    t
+}
+
+fn cwd_matches_pattern(cwd: &Path, pattern: Option<&str>) -> bool {
+    let cwd_s = norm_for_match(cwd.to_string_lossy());
+    match pattern {
+        Some(p) if !p.is_empty() => {
+            let p = norm_for_match(p);
+            cwd_s.contains(&p)
+        }
+        _ => true, // no pattern → default to Docker
+    }
 }

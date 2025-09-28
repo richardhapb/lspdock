@@ -72,7 +72,7 @@ Download the release for your system, or build it from source.
 
 ## Configuration
 
-LSPDock uses the following configuration hierarchy: if the top configuration file is present, use that configuration. Use one configuration file at a time. If an option is not present and the next config file contains it, that option will not be used.
+`LSPDock` uses the following configuration hierarchy: if the top configuration file is present, use that configuration. Use one configuration file at a time. If an option is not present and the next config file contains it, that option will not be used.
 
 ```
 <project-directory>/lspdock.toml
@@ -94,8 +94,9 @@ local_path = "/Users/richard/dev/project"
 # Executable for the LSP server (this will be overwritten if the --exec arg is passed)
 executable = "pyright-langserver"
 
-# Pattern to determine if Docker should be used
-pattern = "/usr/src/app"
+# Pattern to determine whether Docker should be used. If it is not provided, Docker will always be used. If the configuration file is in the project directory,
+# it is a good idea to omit this argument.
+patter = "/Users/richard/dev"
 
 # Optional: Controls PID handling for LSP servers that track client processes
 # List here your LSP server if it auto-terminates when it can't detect the client process

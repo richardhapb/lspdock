@@ -11,7 +11,11 @@ use tracing::{Instrument, Level, debug, error, info, span, trace};
 
 use crate::config::ProxyConfig;
 
-const GOTO_METHODS: &[&str] = &["textDocument/definition", "textDocument/declaration", "textDocument/typeDefinition"];
+const GOTO_METHODS: &[&str] = &[
+    "textDocument/definition",
+    "textDocument/declaration",
+    "textDocument/typeDefinition",
+];
 // This prevents an infinite loop if the LSP or the IDE doesn't respond correctly
 const MAX_EMPTY_RESPONSES_THRESHOLD: usize = 15;
 // Seconds to wait for each iteration after the threshold is reached

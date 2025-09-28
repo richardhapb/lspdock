@@ -54,7 +54,10 @@ impl PidHandler {
 
         loop {
             if !self.is_pid_running() {
-                info!("PID {:?} is not running; shutting down the process", self.pid);
+                info!(
+                    "PID {:?} is not running; shutting down the process",
+                    self.pid
+                );
                 self.cancel_provider.cancel();
                 break;
             }

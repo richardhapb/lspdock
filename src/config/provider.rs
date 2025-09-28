@@ -64,7 +64,7 @@ impl ProxyConfig {
         parent_var.expand(&mut config).unwrap();
         home_var.expand(&mut config).unwrap();
 
-       // Normalize paths for Windows
+        // Normalize paths for Windows
         #[cfg(windows)]
         {
             config.local_path = normalize_path(&config.local_path);
@@ -87,7 +87,7 @@ impl ProxyConfig {
     pub fn requires_patch_pid(&self) -> bool {
         match &self.patch_pid {
             Some(patch_pid) => patch_pid.contains(&self.executable),
-            None => false
+            None => false,
         }
     }
 }
@@ -99,4 +99,3 @@ fn normalize_path(path: &str) -> String {
         .to_string_lossy()
         .replace("/", "\\")
 }
-

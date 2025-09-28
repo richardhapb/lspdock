@@ -1,3 +1,3 @@
 mod io;
 
-pub use io::{forward_proxy, Pair};
+pub use io::{Pair, forward_proxy};

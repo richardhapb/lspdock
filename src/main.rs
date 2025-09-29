@@ -5,6 +5,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod config;
 mod lsp;
 mod proxy;
+use std::path::PathBuf;
 
 use tokio::io::{BufReader, BufWriter};
 
@@ -21,21 +22,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         e
     })?;
 
-    let file;
+    let temp_path;
 
-    // Initialize file logging instead of stdout/stderr
+    // Initialize file logging instead of standard output/error
     #[cfg(unix)]
     {
-        file = std::fs::File::create("/tmp/lspdock_trace.log")
-            .map_err(|e| format!("Failed to create log file: {}", e))?;
+        temp_path = PathBuf::from("/tmp");
     }
 
     #[cfg(windows)]
     {
-        let log_file_path = std::env::temp_dir().join("lspdock_trace.log");
-        file = std::fs::File::create(log_file_path)
-            .map_err(|e| format!("Failed to create log file: {}", e))?;
+        temp_path = std::env::temp_dir();
     }
+
+    let file = format!("lspdock_{}.log", config.executable);
+    let file_path = std::fs::File::create(temp_path.join(&file))
+        .map_err(|e| format!("Failed to create log file: {}", e))?;
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
@@ -44,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .clone()
                 .unwrap_or_else(|| std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into())),
         ))
-        .with(tracing_subscriber::fmt::layer().with_writer(file))
+        .with(tracing_subscriber::fmt::layer().with_writer(file_path))
         .init();
 
     debug!(?config, "configuration file");

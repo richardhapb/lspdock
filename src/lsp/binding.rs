@@ -123,6 +123,7 @@ impl RequestTracker {
         match pair {
             Pair::Server => {
                 let mut v: Value = serde_json::from_str(&raw_str)?;
+                trace!(server_response=%v, "received");
 
                 // Check if this is a response to a tracked request
                 if let Some(id) = v.get("id").and_then(Value::as_u64) {
@@ -151,6 +152,8 @@ impl RequestTracker {
                                     }
                                 }
                                 *raw_str = v.to_string(); // write back the modified JSON
+                            } else {
+                                trace!("result content not found");
                             }
                         }
                     }
@@ -159,6 +162,7 @@ impl RequestTracker {
 
             Pair::Client => {
                 let v: Value = serde_json::from_str(&raw_str)?;
+                trace!(client_request=%v, "received");
 
                 debug!("Checking for id");
                 if let Some(id) = v.get("id").and_then(Value::as_u64) {

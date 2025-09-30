@@ -198,6 +198,7 @@ version = "0.1.6"
 dependencies = [
  "dirs",
  "futures-core",
+ "memchr",
  "serde",
  "serde_json",
  "sysinfo",

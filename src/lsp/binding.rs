@@ -1,4 +1,5 @@
 use crate::{config::ProxyConfig, proxy::Pair};
+use memchr::memmem::find_iter;
 use serde_json::{Value, json};
 use std::{path::PathBuf, process::Stdio, str, sync::Arc};
 use tokio::{
@@ -6,6 +7,7 @@ use tokio::{
     io::AsyncWriteExt,
     process::Command,
 };
+use tokio_util::bytes::Bytes;
 use tracing::{debug, error, trace};
 
 use std::collections::HashMap;
@@ -14,27 +16,42 @@ use tokio::sync::RwLock;
 /// Redirect the paths from the sender pair to the receiver pair; this is used
 /// for matching the paths between the container and the host path.
 pub fn redirect_uri(
-    raw_str: &mut String,
+    raw_bytes: &mut Bytes,
     from: &Pair,
     config: &ProxyConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let from_path_str: &str;
-    let to_path_str: &str;
+    let from_path: &[u8];
+    let to_path: &[u8];
 
     match from {
         Pair::Client => {
-            from_path_str = &config.local_path;
-            to_path_str = &config.docker_internal_path;
+            from_path = &config.local_path.as_bytes();
+            to_path = &config.docker_internal_path.as_bytes();
         }
         Pair::Server => {
-            from_path_str = &config.docker_internal_path;
-            to_path_str = &config.local_path;
+            from_path = &config.docker_internal_path.as_bytes();
+            to_path = &config.local_path.as_bytes();
         }
     }
 
-    trace!(%from_path_str, %to_path_str);
+    trace!(?from_path, ?to_path);
 
-    *raw_str = raw_str.replace(from_path_str, to_path_str);
+    let occurrences = find_iter(&raw_bytes, from_path);
+    let from_n = from_path.len();
+    let mut new_bytes: Bytes = Bytes::new();
+
+    for occurr in occurrences {
+        let before = if occurr > 0 {
+            &raw_bytes[..occurr]
+        } else {
+            &Bytes::new()
+        };
+        let after = &raw_bytes[occurr + from_n..];
+        // add the new text and join
+        new_bytes = Bytes::from([before, to_path, after].concat());
+    }
+
+    *raw_bytes = new_bytes;
 
     Ok(())
 }
@@ -110,7 +127,7 @@ impl RequestTracker {
     pub async fn check_for_methods(
         &self,
         methods: &[&str],
-        raw_str: &mut String,
+        raw_bytes: &mut Bytes,
         pair: &Pair,
     ) -> std::io::Result<()> {
         // If the LSP is not in a container, there is no need to track this.
@@ -122,7 +139,7 @@ impl RequestTracker {
 
         match pair {
             Pair::Server => {
-                let mut v: Value = serde_json::from_str(&raw_str)?;
+                let mut v: Value = serde_json::from_slice(&raw_bytes)?;
                 trace!(server_response=%v, "received");
 
                 // Check if this is a response to a tracked request
@@ -151,7 +168,12 @@ impl RequestTracker {
                                         }
                                     }
                                 }
-                                *raw_str = v.to_string(); // write back the modified JSON
+
+                                if let Some(vstr) = v.as_str() {
+                                    *raw_bytes = Bytes::from(vstr.as_bytes().to_owned());
+                                } else {
+                                    error!(%v ,"error converting to str");
+                                }
                             } else {
                                 trace!("result content not found");
                             }
@@ -161,7 +183,7 @@ impl RequestTracker {
             }
 
             Pair::Client => {
-                let v: Value = serde_json::from_str(&raw_str)?;
+                let v: Value = serde_json::from_slice(&raw_bytes)?;
                 trace!(client_request=%v, "received");
 
                 debug!("Checking for id");

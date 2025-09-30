@@ -18,9 +18,31 @@ use crate::config::resolve_config_path;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = resolve_config_path()?;
     let mut config = ProxyConfig::from_file(&config_path).map_err(|e| {
-        error!("Error retrieving config: {e}");
+        eprintln!("Error retrieving config: {e}");
         e
     })?;
+
+    let args = std::env::args();
+
+    let mut lsp_args: Vec<String> = Vec::new();
+    let mut exec_arg = config.executable.clone();
+    let mut exec_arg_passed = false;
+
+    for (i, extra_arg) in args.skip(1).enumerate() {
+        if i == 0 && extra_arg == "--exec" {
+            exec_arg_passed = true;
+            continue;
+        }
+
+        if i == 1 && exec_arg_passed {
+            exec_arg = extra_arg;
+            // Set the executable if it is passed in the argument
+            config.update_executable(exec_arg.clone());
+            continue;
+        }
+
+        lsp_args.push(extra_arg);
+    }
 
     let temp_path;
 
@@ -49,31 +71,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer().with_writer(file_path))
         .init();
 
-    debug!(?config, "configuration file");
-
-    let args = std::env::args();
-
-    let mut lsp_args: Vec<String> = Vec::new();
-    let mut exec_arg = config.executable.clone();
-    let mut exec_arg_passed = false;
-
-    for (i, extra_arg) in args.skip(1).enumerate() {
-        if i == 0 && extra_arg == "--exec" {
-            exec_arg_passed = true;
-            debug!("--exec argument received");
-            continue;
-        }
-
-        if i == 1 && exec_arg_passed {
-            exec_arg = extra_arg;
-            // Set the executable if it is passed in the argument
-            config.update_executable(exec_arg.clone());
-            debug!(%exec_arg, "Captured custom executable from argument");
-            continue;
-        }
-
-        lsp_args.push(extra_arg);
+    if exec_arg_passed {
+        debug!("--exec argument received");
+        debug!(exec=%config.executable, "Captured custom executable from argument");
     }
+    debug!(?config, "configuration file");
 
     // Call docker only if the pattern matches.
     let (cmd, mut cmd_args) = if config.use_docker {

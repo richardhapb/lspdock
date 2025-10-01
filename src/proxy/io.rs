@@ -18,8 +18,6 @@ const GOTO_METHODS: &[&str] = &[
 ];
 // This prevents an infinite loop if the LSP or the IDE doesn't respond correctly
 const MAX_EMPTY_RESPONSES_THRESHOLD: usize = 15;
-// Seconds to wait for each iteration after the threshold is reached
-const SECONDS_AFTER_THRESHOLD: u64 = 30;
 
 #[derive(Debug)]
 pub enum Pair {
@@ -147,8 +145,8 @@ where
                                 };
 
                                 if empty_counter >= MAX_EMPTY_RESPONSES_THRESHOLD {
-                                    info!("The empty response has reached the threshold; waiting {SECONDS_AFTER_THRESHOLD} seconds");
-                                    tokio::time::sleep(Duration::from_secs(SECONDS_AFTER_THRESHOLD)).await;
+                                    info!("The empty response has reached the threshold; closing LSP connection");
+                                    break;
                                 }
 
                                 for mut msg in msgs {
@@ -170,7 +168,7 @@ where
                                         redirect_uri(&mut msg, &pair, &config_clone)?;
                                         tracker_inner.check_for_methods(GOTO_METHODS, &mut msg, &pair).await?;
                                     }
-                                    send_message(&mut writer, msg).await.map_err(|e| {
+                                    send_message(&mut writer, &msg).await.map_err(|e| {
                                         error!("Failed to forward the request: {}", e);
                                         e
                                     })?;

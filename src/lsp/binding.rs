@@ -1,4 +1,5 @@
 use crate::{config::ProxyConfig, proxy::Pair};
+use memchr::memmem::{find, find_iter};
 use serde_json::{Value, json};
 use std::{path::PathBuf, process::Stdio, str, sync::Arc};
 use tokio::{
@@ -6,6 +7,7 @@ use tokio::{
     io::AsyncWriteExt,
     process::Command,
 };
+use tokio_util::bytes::Bytes;
 use tracing::{debug, error, trace};
 
 use std::collections::HashMap;
@@ -14,27 +16,41 @@ use tokio::sync::RwLock;
 /// Redirect the paths from the sender pair to the receiver pair; this is used
 /// for matching the paths between the container and the host path.
 pub fn redirect_uri(
-    raw_str: &mut String,
+    raw_bytes: &mut Bytes,
     from: &Pair,
     config: &ProxyConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let from_path_str: &str;
-    let to_path_str: &str;
+    let from_path: &[u8];
+    let to_path: &[u8];
 
     match from {
         Pair::Client => {
-            from_path_str = &config.local_path;
-            to_path_str = &config.docker_internal_path;
+            from_path = &config.local_path.as_bytes();
+            to_path = &config.docker_internal_path.as_bytes();
         }
         Pair::Server => {
-            from_path_str = &config.docker_internal_path;
-            to_path_str = &config.local_path;
+            from_path = &config.docker_internal_path.as_bytes();
+            to_path = &config.local_path.as_bytes();
         }
     }
 
-    trace!(%from_path_str, %to_path_str);
+    trace!(from=?String::from_utf8(from_path.to_vec()), to=?String::from_utf8(to_path.to_vec()));
 
-    *raw_str = raw_str.replace(from_path_str, to_path_str);
+    let occurrences = find_iter(&raw_bytes, from_path);
+    let from_n = from_path.len();
+    let mut new_bytes: Bytes = Bytes::new();
+    let mut last = 0;
+
+    for occurr in occurrences {
+        let before = &raw_bytes[last..occurr];
+        last = occurr + from_n;
+        // add the new text and join
+        new_bytes = Bytes::from([&new_bytes, before, to_path].concat());
+    }
+    let after = &raw_bytes[last..];
+    new_bytes = Bytes::from([&new_bytes, after].concat());
+
+    *raw_bytes = new_bytes;
 
     Ok(())
 }
@@ -98,19 +114,19 @@ impl RequestTracker {
         self.map.write().await.insert(id, method.to_string());
     }
 
-    async fn take_if_match(&self, id: u64, expected: &str) -> bool {
+    async fn take_if_match(&self, id: u64) -> bool {
         let mut map = self.map.write().await;
-        let exists = map.get(&id).map(|m| m == expected).unwrap_or(false);
-        if exists {
+        if map.get(&id).is_some() {
             map.remove(&id);
+            return true;
         }
-        exists
+        false
     }
 
     pub async fn check_for_methods(
         &self,
         methods: &[&str],
-        raw_str: &mut String,
+        raw_bytes: &mut Bytes,
         pair: &Pair,
     ) -> std::io::Result<()> {
         // If the LSP is not in a container, there is no need to track this.
@@ -118,66 +134,73 @@ impl RequestTracker {
             return Ok(());
         }
 
-        //textDocument/declaration
-
         match pair {
             Pair::Server => {
-                let mut v: Value = serde_json::from_str(&raw_str)?;
+                // Early return
+                if self.map.read().await.is_empty() {
+                    trace!("Nothing expecting response, skipping method");
+                    return Ok(());
+                }
+
+                let mut v: Value = serde_json::from_slice(raw_bytes.as_ref())?;
                 trace!(server_response=%v, "received");
 
                 // Check if this is a response to a tracked request
                 if let Some(id) = v.get("id").and_then(Value::as_u64) {
-                    for method in methods {
-                        debug!("Checking for {method} method");
+                    let matches = self.take_if_match(id).await;
+                    debug!(%matches);
+                    if matches {
+                        trace!(%id, "matches");
+                        if let Some(results) = v.get_mut("result").and_then(Value::as_array_mut) {
+                            trace!(?results);
+                            for result in results {
+                                if let Some(uri_val) = result.get("uri").and_then(|u| u.as_str()) {
+                                    if !(uri_val.contains(&self.config.local_path)) {
+                                        debug!(%uri_val);
+                                        let new_uri = self.bind_library(uri_val).await?;
+                                        debug!("file://{}", new_uri);
 
-                        let matches = self.take_if_match(id, *method).await;
-                        debug!(%matches);
-                        if matches {
-                            trace!(%id, "matches");
-                            if let Some(results) = v.get_mut("result").and_then(Value::as_array_mut)
-                            {
-                                trace!(?results);
-                                for result in results {
-                                    if let Some(uri_val) =
-                                        result.get("uri").and_then(|u| u.as_str())
-                                    {
-                                        if !(uri_val.contains(&self.config.local_path)) {
-                                            debug!(%uri_val);
-                                            let new_uri =
-                                                self.bind_library(uri_val.to_string()).await?;
-                                            debug!("file://{}", new_uri);
-
-                                            Self::modify_uri(result, &new_uri);
-                                        }
+                                        Self::modify_uri(result, &new_uri);
                                     }
                                 }
-                                *raw_str = v.to_string(); // write back the modified JSON
-                            } else {
-                                trace!("result content not found");
                             }
+
+                            *raw_bytes = Bytes::from(serde_json::to_vec(&v)?);
+                        } else {
+                            trace!("result content not found");
                         }
                     }
                 }
             }
 
             Pair::Client => {
-                let v: Value = serde_json::from_str(&raw_str)?;
+                // Early check to avoid parsing
+                let mut method_found = "";
+                for method in methods {
+                    debug!("Checking for {method} method");
+                    let expected = &[b"\"method\":\"", method.as_bytes(), b"\""].concat();
+                    if find(raw_bytes, expected).is_some() {
+                        method_found = method;
+                        break;
+                    }
+                }
+
+                if method_found.is_empty() {
+                    debug!("Any method that required redirection was not found, skipping patch");
+                    return Ok(());
+                }
+
+                debug!(%method_found);
+
+                let v: Value = serde_json::from_slice(raw_bytes.as_ref())?;
                 trace!(client_request=%v, "received");
 
                 debug!("Checking for id");
                 if let Some(id) = v.get("id").and_then(Value::as_u64) {
                     debug!(%id);
-
-                    if let Some(req_method) = v.get("method").and_then(Value::as_str) {
-                        trace!(%req_method);
-                        // Only track expected methods if URI matches
-                        for method in methods {
-                            if req_method == *method {
-                                debug!(%id, "Storing");
-                                self.track(id, *method).await;
-                            }
-                        }
-                    }
+                    // Only track expected methods if URI matches
+                    self.track(id, method_found).await;
+                    debug!(%id, "Storing");
                 }
             }
         }
@@ -185,7 +208,7 @@ impl RequestTracker {
         Ok(())
     }
 
-    async fn bind_library(&self, uri: String) -> std::io::Result<String> {
+    async fn bind_library(&self, uri: &str) -> std::io::Result<String> {
         let temp_dir = std::env::temp_dir().join("lspdock");
         trace!(temp_dir=%temp_dir.to_string_lossy());
 
@@ -200,7 +223,7 @@ impl RequestTracker {
         } else {
             let relative_path = safe_path.strip_prefix("/").unwrap_or(&safe_path);
             trace!(%relative_path);
-            let tmp_file_path = relative_path.to_string();
+            let tmp_file_path = relative_path;
             temp_dir.join(tmp_file_path)
         };
 
@@ -216,7 +239,7 @@ impl RequestTracker {
         let temp_uri_path = PathBuf::from(&temp_uri);
         debug!(%temp_uri);
         if !temp_uri_path.exists() {
-            self.copy_file(safe_path.to_string(), &temp_uri).await?;
+            self.copy_file(&safe_path, &temp_uri).await?;
         } else {
             debug!("File already exists, skipping copy. {}", temp_uri);
         }
@@ -225,7 +248,7 @@ impl RequestTracker {
     }
 
     /// Copies a file from either the local filesystem or a Docker container.
-    async fn copy_file(&self, path: String, destination: &str) -> std::io::Result<()> {
+    async fn copy_file(&self, path: &str, destination: &str) -> std::io::Result<()> {
         // Only copy the file if the LSP is in a container
         debug!("Starting file copy from {} to {}", path, destination);
         let cmd = Command::new("docker")

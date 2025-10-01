@@ -5,7 +5,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod config;
 mod lsp;
 mod proxy;
-use std::path::PathBuf;
 
 use tokio::io::{BufReader, BufWriter};
 
@@ -49,6 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize file logging instead of standard output/error
     #[cfg(unix)]
     {
+        use std::path::PathBuf;
         temp_path = PathBuf::from("/tmp");
     }
 

@@ -134,10 +134,15 @@ pub async fn send_message(
     let len = message.len();
     debug!(%len, "Sending message");
     trace!(?message);
-    let message_str = String::from_utf8(message.to_vec())?;
-    let msg = format!("Content-Length: {len}\r\n\r\n{message_str}");
+    let msg = &[
+        b"Content-Length: ",
+        len.to_string().as_bytes(),
+        b"\r\n\r\n",
+        &message,
+    ]
+    .concat();
 
-    writer.write_all(msg.as_bytes()).await?;
+    writer.write_all(msg).await?;
     writer.flush().await?;
 
     Ok(())

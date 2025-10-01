@@ -2,7 +2,7 @@ use memchr::memmem::find;
 use serde_json::{Value, json};
 use sysinfo::{Pid, System};
 use tokio_util::{bytes::Bytes, sync::CancellationToken};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 pub struct PidHandler {
     pid: Option<u64>,
@@ -27,31 +27,24 @@ impl PidHandler {
         &mut self,
         raw_bytes: &mut Bytes,
     ) -> serde_json::error::Result<bool> {
-        if find(raw_bytes, br#""method":"initialize""#).is_some() {
-            debug!("Initialize method found, patching");
-            trace!(?raw_bytes, "before patch");
-
-            let mut v: Value = serde_json::from_slice(&raw_bytes)?;
-            if let Some(process_id) = v
-                .get_mut("params")
-                .and_then(|params| params.get_mut("processId"))
-            {
-                self.pid = process_id.as_u64();
-                trace!(self.pid, "captured PID");
-                *process_id = json!("null");
-            }
-
-            if let Some(vstr) = v.as_str() {
-                *raw_bytes = Bytes::from(vstr.as_bytes().to_owned());
-            } else {
-                error!(%v ,"error converting to str");
-            }
-
-            trace!(?raw_bytes, "patched");
-            return Ok(true);
+        if find(raw_bytes, br#""method":"initialize""#).is_none() {
+            trace!("Initialize method not found, skipping patch");
+            return Ok(false);
         }
-        trace!("Initialize method not found, skipping patch");
-        return Ok(false);
+
+        debug!("Initialize method found, patching");
+        trace!(?raw_bytes, "before patch");
+
+        let mut v: Value = serde_json::from_slice(raw_bytes.as_ref())?;
+        if let Some(process_id) = v.pointer_mut("/params/processId") {
+            self.pid = process_id.as_u64();
+            trace!(self.pid, "captured PID");
+            *process_id = json!("null");
+        }
+        *raw_bytes = Bytes::from(serde_json::to_vec(&v)?);
+
+        trace!(?raw_bytes, "patched");
+        return Ok(true);
     }
 
     /// Monitor periodically if the PID is running

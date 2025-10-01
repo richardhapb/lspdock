@@ -1,12 +1,15 @@
+use memchr::memmem::find;
 use std::error::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio_util::bytes::{Buf, BytesMut};
-use tracing::{debug, error, trace, warn};
+use tokio_util::bytes::{Buf, Bytes, BytesMut};
+use tracing::{debug, trace};
 
 pub struct LspFramedReader<R> {
     reader: BufReader<R>,
     buffer: BytesMut,
 }
+
+const MAX_CONTENT_LENGTH: usize = 16 * 1024 * 1024;
 
 impl<R: AsyncRead + Unpin> LspFramedReader<R> {
     pub fn new(inner: R) -> Self {
@@ -40,112 +43,106 @@ impl<R: AsyncRead + Unpin> LspFramedReader<R> {
     /// ```
     pub async fn read_messages(
         &mut self,
-    ) -> Result<Option<Vec<String>>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Option<Vec<Bytes>>, Box<dyn Error + Send + Sync>> {
         let mut messages = Vec::new();
-        let n = self.reader.read_buf(&mut self.buffer).await?;
-        if n == 0 && self.buffer.is_empty() {
-            return Ok(None);
-        }
 
-        while let Some((message, advance)) = self.try_parse_message() {
-            self.buffer.advance(advance);
-            messages.push(message);
-        }
+        loop {
+            // parse all complete frames currently in buffer
+            let mut made_progress = false;
+            while let Some((message, advance)) = self.try_parse_message()? {
+                self.buffer.advance(advance);
+                messages.push(message);
+                made_progress = true;
+            }
+            if made_progress {
+                // return as a batch once we’ve produced something
+                return Ok(Some(messages));
+            }
 
-        Ok(Some(messages))
+            // need more bytes to complete the next frame
+            let n = self.reader.read_buf(&mut self.buffer).await?;
+            if n == 0 {
+                // EOF
+                if self.buffer.is_empty() {
+                    return Ok(None); // clean end
+                } else {
+                    return Err("unexpected EOF while reading LSP message".into());
+                }
+            }
+        }
     }
 
     /// Capture a message from the buffer.
     /// If the header, content-length, or body is None, return None and reset the FSM's state.
-    fn try_parse_message(&self) -> Option<(String, usize)> {
-        let header_end = self.find_header_end()?;
+    fn try_parse_message(&self) -> Result<Option<(Bytes, usize)>, Box<dyn Error + Send + Sync>> {
+        let header_end = match find(&self.buffer, b"\r\n\r\n") {
+            Some(h) => h + 4,
+            None => return Ok(None), // header incomplete
+        };
         trace!(header_end);
+
         let headers = &self.buffer[..header_end];
-
         let content_length = self.extract_content_length(headers)?;
-        let (body, advance) = self.extract_body(header_end, content_length)?;
-
-        Some((body, advance))
-    }
-
-    /// Find the end of the header, which is marked by `\r\n\r\n`
-    fn find_header_end(&self) -> Option<usize> {
-        for i in 3..self.buffer.len() {
-            if &self.buffer[i - 3..=i] == b"\r\n\r\n" {
-                return Some(i + 1);
-            }
+        if content_length > MAX_CONTENT_LENGTH {
+            return Err(format!(
+                "Content-Length {} exceeds limit {}",
+                content_length, MAX_CONTENT_LENGTH
+            )
+            .into());
         }
-        return None;
+
+        // body complete?
+        let message_start = header_end;
+        let message_end = match header_end.checked_add(content_length) {
+            Some(x) => x,
+            None => return Err("Content-Length overflow".into()),
+        };
+        if self.buffer.len() < message_end {
+            return Ok(None); // need more bytes
+        }
+
+        // Zero-copy-ish: slice then to_string
+        let body = self.buffer[message_start..message_end].to_vec();
+
+        Ok(Some((Bytes::from(body), message_end)))
     }
 
     /// Extract the content length value from the header
-    fn extract_content_length(&self, headers: &[u8]) -> Option<usize> {
-        let headers_str = String::from_utf8(headers.to_vec()).ok()?;
-        let mut content_length = None;
-
-        for line in headers_str.split("\r\n") {
-            if line.is_empty() {
-                continue;
-            }
-
-            trace!("Processing header line: '{}'", line);
-            if let Some(colon_pos) = line.find(':') {
-                let key = line[..colon_pos].trim();
-                let value = line[colon_pos + 1..].trim();
-
-                trace!("Header key: '{}', value: '{}'", key, value);
-
-                // Check for Content-Length with case-insensitive matching
-                if key.eq_ignore_ascii_case("content-length") {
-                    match value.parse::<usize>() {
-                        Ok(len) => {
-                            content_length = Some(len);
-                            break;
-                        }
-                        Err(e) => {
-                            error!("Failed to parse Content-Length '{}': {}", value, e);
-                            return None;
-                        }
-                    }
-                } else if !key.is_empty() {
-                    warn!("Wrong content length header: {}", key);
-                    return None;
+    fn extract_content_length(
+        &self,
+        headers: &[u8],
+    ) -> Result<usize, Box<dyn Error + Send + Sync>> {
+        let s = std::str::from_utf8(headers)?; // no allocation
+        for line in s.split("\r\n") {
+            if let Some(colon) = line.find(':') {
+                let (k, v) = (&line[..colon], &line[colon + 1..]);
+                if k.trim().eq_ignore_ascii_case("content-length") {
+                    return Ok(v.trim().parse::<usize>()?);
                 }
-            } else {
-                debug!("Header line without colon: '{}'", line);
+                // ignore other headers like Content-Type
             }
         }
-
-        content_length
-    }
-
-    /// Extract the body of the message. If the buffer doesn't have enough data to complete the body,
-    /// according to the content length, return None
-    fn extract_body(&self, header_end: usize, content_length: usize) -> Option<(String, usize)> {
-        let message_start = header_end;
-        let message_end = header_end + content_length;
-
-        if self.buffer.len() < message_end {
-            return None;
-        }
-
-        let message = String::from_utf8(self.buffer[message_start..message_end].to_vec()).ok()?;
-
-        Some((message, message_end))
+        Err("missing Content-Length header".into())
     }
 }
 
 /// Send a message from the proxy to the destination
 pub async fn send_message(
     writer: &mut tokio::io::BufWriter<impl tokio::io::AsyncWriteExt + Unpin>,
-    message: String,
+    message: &Bytes,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let len = message.as_bytes().len();
+    let len = message.len();
     debug!(%len, "Sending message");
-    trace!(%message);
-    let msg = format!("Content-Length: {len}\r\n\r\n{message}");
+    trace!(?message);
+    let msg = &[
+        b"Content-Length: ",
+        len.to_string().as_bytes(),
+        b"\r\n\r\n",
+        &message,
+    ]
+    .concat();
 
-    writer.write_all(msg.as_bytes()).await?;
+    writer.write_all(msg).await?;
     writer.flush().await?;
 
     Ok(())

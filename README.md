@@ -42,7 +42,7 @@ flowchart TD
 
 ## Installation
 
-Download the release for your system, or build it from source.
+Download the [release](https://github.com/richardhapb/lspdock/releases) for your system, or build it from source.
 
 ## Build from source
 
@@ -65,7 +65,7 @@ Download the release for your system, or build it from source.
 
 3. Install the binary:
    ```bash
-   cp target/release/lspdock /usr/local/bin/
+   cp target/release/lspdock /usr/local/bin
    ```
 
 ---
@@ -89,14 +89,14 @@ container = "my-container"
 docker_internal_path = "/usr/src/app"
 
 # Path on the host machine
-local_path = "/Users/richard/dev/project"
+local_path = "/home/richard/dev/project"
 
 # Executable for the LSP server (this will be overwritten if the --exec arg is passed)
 executable = "pyright-langserver"
 
 # Pattern to determine whether Docker should be used. If it is not provided, Docker will always be used. If the configuration file is in the project directory,
 # it is a good idea to omit this argument.
-patter = "/Users/richard/dev"
+pattern = "/home/richard/dev"
 
 # Optional: Controls PID handling for LSP servers that track client processes
 # List here your LSP server if it auto-terminates when it can't detect the client process
@@ -180,17 +180,17 @@ Refer to the [IDEs configuration guide](ides.md) for detailed configuration step
 
 1. Start LSPDock:
    ```bash
-   lspdock
+   lspdock  # Will be expecting to receive a message from stdin; this should be handled by the IDE
    ```
 
 2. LSPDock will automatically read the configuration file and start the LSP server. If the `pattern` matches the current working directory, LSPDock will use Docker; otherwise, it will run the LSP server directly.
 
 ### Logs
 
-Logs are written to a temporary directory. On Unix systems, this is located at `/tmp/lspdock_trace.log`, and on Windows, it is located at `C:/Windows/Temp`. You can monitor the logs for debugging:
+Logs are written to a temporary directory. On Unix systems, this is located at `/tmp/lspdock_<binary-name>.log`, and on Windows, it is located at `C:/Windows/Temp`. You can monitor the logs for debugging, for example with rust-analyzer:
 
 ```bash
-tail -f /tmp/lspdock_trace.log
+tail -f /tmp/lspdock_rust-analyzer.log
 ```
 
 ---

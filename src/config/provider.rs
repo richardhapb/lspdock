@@ -66,6 +66,12 @@ impl ProxyConfig {
         parent_var.expand(&mut config).unwrap();
         home_var.expand(&mut config).unwrap();
 
+        // Normalize local path for Windows
+        #[cfg(windows)]
+        {
+            config.local_path = normalize_win_local(&config.local_path);
+        }
+
         config.use_docker = match config_path.r#type {
             PathType::Home => {
                 let cwd = current_dir()?;
@@ -95,6 +101,20 @@ impl ProxyConfig {
             None => false,
         }
     }
+}
+
+// Helper function to normalize paths
+#[cfg(windows)]
+fn normalize_win_local(path: &str) -> String {
+    let mut s = std::path::Path::new(path).to_string_lossy().to_string();
+    s = s.replace('\\', "/");
+    if s.len() >= 2 && s.as_bytes()[1] == b':' {
+        let mut it = s.chars();
+        let drive = it.next().unwrap().to_ascii_lowercase();
+        let rest: String = it.collect();
+        s = format!("/{}{}", drive, rest);
+    }
+    s
 }
 
 fn norm_for_match<S: AsRef<str>>(s: S) -> String {

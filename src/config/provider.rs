@@ -139,3 +139,18 @@ fn cwd_matches_pattern(cwd: &Path, pattern: Option<&str>) -> bool {
         _ => true, // no pattern → default to Docker
     }
 }
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    #[test]
+    fn windows_normalize_local() {
+        let local_path = "C:\\Users\\testUser\\dev";
+        let normalized = normalize_win_local(local_path);
+
+        assert_eq!(
+            normalized,
+            format!("/{}", local_path.replace("\\", "/").replace("C:", "c:")),
+        );
+    }
+}

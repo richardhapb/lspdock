@@ -78,7 +78,7 @@ jobs:
       - name: Build
         run: |
           if [[ "${{ matrix.platform.use_cross }}" == "true" ]]; then
-          # Force cross to rebuild build scripts in container
+            # Force cross to rebuild build scripts in container
             rm -rf target/debug/build
             cross build --target ${{ matrix.platform.target }} --verbose
           else

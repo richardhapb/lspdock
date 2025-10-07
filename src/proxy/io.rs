@@ -150,8 +150,8 @@ where
                                 }
 
                                 for mut msg in msgs {
-                                    if config_clone.requires_patch_pid() {
-                                        if let Some(ref mut pid_handler_ref) = pid_handler {
+                                    if config_clone.requires_patch_pid() &&
+                                         let Some(ref mut pid_handler_ref) = pid_handler {
                                             trace!("Trying to take the PID from the initialize method");
                                             // The function returns true if the take succeeds
                                             if pid_handler_ref.try_take_initialize_process_id(&mut msg)? {
@@ -159,7 +159,6 @@ where
                                                 // Set the pid_handler to None to avoid attempting to patch the PID again
                                                 if let Some(pid_handler) = pid_handler.take() {
                                                     tokio::spawn(async move { pid_handler.monitor_pid().await });
-                                                }
                                             }
                                         }
                                     }

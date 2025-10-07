@@ -44,7 +44,7 @@ impl PidHandler {
         *raw_bytes = Bytes::from(serde_json::to_vec(&v)?);
 
         trace!(?raw_bytes, "patched");
-        return Ok(true);
+        Ok(true)
     }
 
     /// Monitor periodically if the PID is running

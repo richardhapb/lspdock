@@ -138,7 +138,7 @@ pub async fn send_message(
         b"Content-Length: ",
         len.to_string().as_bytes(),
         b"\r\n\r\n",
-        &message,
+        message,
     ]
     .concat();
 

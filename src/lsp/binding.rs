@@ -25,18 +25,18 @@ pub fn redirect_uri(
 
     match from {
         Pair::Client => {
-            from_path = &config.local_path.as_bytes();
-            to_path = &config.docker_internal_path.as_bytes();
+            from_path = config.local_path.as_bytes();
+            to_path = config.docker_internal_path.as_bytes();
         }
         Pair::Server => {
-            from_path = &config.docker_internal_path.as_bytes();
-            to_path = &config.local_path.as_bytes();
+            from_path = config.docker_internal_path.as_bytes();
+            to_path = config.local_path.as_bytes();
         }
     }
 
     trace!(from=?String::from_utf8(from_path.to_vec()), to=?String::from_utf8(to_path.to_vec()));
 
-    let occurrences = find_iter(&raw_bytes, from_path);
+    let occurrences = find_iter(raw_bytes, from_path);
     let from_n = from_path.len();
     let mut new_bytes: Bytes = Bytes::new();
     let mut last = 0;
@@ -154,14 +154,14 @@ impl RequestTracker {
                         if let Some(results) = v.get_mut("result").and_then(Value::as_array_mut) {
                             trace!(?results);
                             for result in results {
-                                if let Some(uri_val) = result.get("uri").and_then(|u| u.as_str()) {
-                                    if !(uri_val.contains(&self.config.local_path)) {
-                                        debug!(%uri_val);
-                                        let new_uri = self.bind_library(uri_val).await?;
-                                        debug!("file://{}", new_uri);
+                                if let Some(uri_val) = result.get("uri").and_then(|u| u.as_str())
+                                    && !(uri_val.contains(&self.config.local_path))
+                                {
+                                    debug!(%uri_val);
+                                    let new_uri = self.bind_library(uri_val).await?;
+                                    debug!("file://{}", new_uri);
 
-                                        Self::modify_uri(result, &new_uri);
-                                    }
+                                    Self::modify_uri(result, &new_uri);
                                 }
                             }
 
@@ -212,7 +212,7 @@ impl RequestTracker {
         let temp_dir = std::env::temp_dir().join("lspdock");
         trace!(temp_dir=%temp_dir.to_string_lossy());
 
-        let safe_path = PathBuf::from(uri.strip_prefix("file://").unwrap_or(&uri));
+        let safe_path = PathBuf::from(uri.strip_prefix("file://").unwrap_or(uri));
         let safe_path = safe_path.to_string_lossy();
 
         debug!(%safe_path);
@@ -252,7 +252,7 @@ impl RequestTracker {
         // Only copy the file if the LSP is in a container
         debug!("Starting file copy from {} to {}", path, destination);
         let cmd = Command::new("docker")
-            .args(&["exec", &self.config.container, "cat", &path])
+            .args(["exec", &self.config.container, "cat", path])
             .stdout(Stdio::piped())
             .stdin(Stdio::null())
             .stderr(Stdio::piped())
@@ -264,10 +264,7 @@ impl RequestTracker {
         if !status.status.success() {
             let stderr = String::from_utf8_lossy(&status.stderr);
             error!("Command failed with status {}: {}", status.status, stderr);
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("command failed: {}", stderr),
-            ));
+            return Err(std::io::Error::other(format!("command failed: {}", stderr)));
         }
 
         let mut file = File::create(destination).await?;

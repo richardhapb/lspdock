@@ -31,7 +31,7 @@ pub fn resolve_config_path() -> std::io::Result<ConfigPath> {
         });
     }
 
-    let home = dirs::home_dir().unwrap_or(PathBuf::new());
+    let home = dirs::home_dir().unwrap_or_default();
     let home_config = home.join(".config").join("lspdock").join(CONFIG_NAME);
 
     if home_config.exists() {

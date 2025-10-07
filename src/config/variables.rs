@@ -59,7 +59,7 @@ impl VariableResolver for VariableCwd {
         let expanded = cwd
             .to_str()
             .ok_or_else(|| "Could not convert current directory to string".to_string())?;
-        expand_into_config(config, &var, &expanded);
+        expand_into_config(config, &var, expanded);
 
         Ok(())
     }
@@ -73,7 +73,7 @@ impl VariableResolver for VariableParent {
         let expanded = parent
             .to_str()
             .ok_or_else(|| "Could not convert parent directory to string".to_string())?;
-        expand_into_config(config, &var, &expanded);
+        expand_into_config(config, &var, expanded);
 
         Ok(())
     }
@@ -87,7 +87,7 @@ impl VariableResolver for VariableHome {
         let expanded = home
             .to_str()
             .ok_or_else(|| "Could not convert home to string".to_string())?;
-        expand_into_config(config, &var, &expanded);
+        expand_into_config(config, &var, expanded);
 
         Ok(())
     }

@@ -1,5 +1,4 @@
-name: Cross Build and Test
-
+name: Release
 on:
   push:
     tags: ["v*"]
@@ -8,21 +7,20 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
   build:
+    needs: test # Only build if tests pass
     strategy:
       matrix:
         include:
-          # Linux (GNU) via cross
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             use_cross: true
-
-          # Windows (GNU) via cross
           - target: x86_64-pc-windows-gnu
             runner: ubuntu-latest
             use_cross: true
-
-          # macOS native
           - target: aarch64-apple-darwin
             runner: macos-latest
             use_cross: false
@@ -38,10 +36,6 @@ jobs:
         with:
           toolchain: stable
           target: ${{ matrix.target }}
-          components: rustfmt
-
-      - name: Rustfmt Check
-        uses: actions-rust-lang/rustfmt@v1
 
       - name: Install cross (Ubuntu only)
         if: ${{ matrix.use_cross }}
@@ -50,19 +44,6 @@ jobs:
       - name: Clean before cross to avoid glibc mix
         if: ${{ matrix.use_cross }}
         run: cargo clean
-
-      - name: Run tests (except on Windows)
-        if: ${{ !contains(matrix.target, 'windows') }}
-        run: |
-          if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross test --locked --target ${{ matrix.target }} -v
-          else
-            cargo test --locked --target ${{ matrix.target }} -v
-          fi
-
-      - name: Warn about skipped Windows tests
-        if: ${{ contains(matrix.target, 'windows') }}
-        run: echo "Skipping tests for ${{ matrix.target }} (cannot run Windows tests on Ubuntu CI)"
 
       - name: Build release binary
         run: |
@@ -99,11 +80,13 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
+
     steps:
       - name: Download all build artifacts
         uses: actions/download-artifact@v5
         with:
           path: dist
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:

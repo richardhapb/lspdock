@@ -1,10 +1,10 @@
-name: TESTS
-
+name: Tests
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call: # reusable by other workflows
 
 env:
   CARGO_TERM_COLOR: always
@@ -78,6 +78,8 @@ jobs:
       - name: Build
         run: |
           if [[ "${{ matrix.platform.use_cross }}" == "true" ]]; then
+          # Force cross to rebuild build scripts in container
+            rm -rf target/debug/build
             cross build --target ${{ matrix.platform.target }} --verbose
           else
             cargo build --target ${{ matrix.platform.target }} --verbose
@@ -96,6 +98,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v5
 

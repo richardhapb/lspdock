@@ -284,3 +284,68 @@ impl RequestTracker {
         };
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lsp::parser::lsp_utils::{lspbody, lspmsg};
+
+    fn construct_config() -> ProxyConfig {
+        ProxyConfig {
+            container: "test".into(),
+            local_path: "/test/path".into(),
+            docker_internal_path: "/usr/home/app".into(),
+            executable: "somelsp".into(),
+            pattern: Some("/test".into()),
+            use_docker: true,
+            log_level: None,
+            patch_pid: None,
+        }
+    }
+
+    #[test]
+    fn redirect_single_uri() {
+        let config = construct_config();
+        let rq = lspmsg!("uri": "/test/path");
+        let ex = lspmsg!("uri": "/usr/home/app");
+        let mut request = Bytes::from(rq);
+        let expected = Bytes::from(ex);
+
+        redirect_uri(&mut request, &Pair::Client, &config).unwrap();
+
+        assert_eq!(
+            lspbody!(&expected => "bytes"),
+            lspbody!(&request => "bytes")
+        );
+    }
+
+    #[test]
+    fn redirect_multiples_uris() {
+        let config = construct_config();
+
+        // From Client to Server
+
+        let rq = lspmsg!("uri": "/test/path", "method": "text/document", "workspaceFolder": "/test/path");
+        let ex = lspmsg!("uri": "/usr/home/app", "method": "text/document", "workspaceFolder": "/usr/home/app");
+
+        let mut request = Bytes::from(rq.clone());
+        let mut expected = Bytes::from(ex);
+
+        redirect_uri(&mut request, &Pair::Client, &config).unwrap();
+
+        assert_eq!(
+            lspbody!(&expected => "bytes"),
+            lspbody!(&request => "bytes")
+        );
+
+        // From Server to Client
+
+        redirect_uri(&mut expected, &Pair::Server, &config).unwrap();
+
+        let request = Bytes::from(rq);
+        assert_eq!(
+            lspbody!(&request => "bytes"),
+            lspbody!(&expected => "bytes")
+        );
+    }
+}

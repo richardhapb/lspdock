@@ -149,7 +149,51 @@ pub async fn send_message(
 }
 
 #[cfg(test)]
+pub mod lsp_utils {
+    macro_rules! lspmsg {
+    ($($key:literal: $value:expr),+ $(,)?) => {{
+        // Build JSON params object
+        let params = format!(
+            r#"{{{}}}"#,
+            vec![$(format!(r#""{}":"{}""#, $key, $value)),+]
+                .join(",")
+        );
+
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","method":"window/logMessage","params":{}}}"#,
+            params
+        );
+
+        let header = format!("Content-Length: {}\r\n\r\n", body.len());
+        format!("{}{}", header, body)
+    }};
+}
+
+    macro_rules! lspbody {
+        ($fullmsg:expr) => {{
+            $fullmsg
+                .split("\r\n\r\n")
+                .nth(1)
+                .expect("lsp message must contain a header")
+        }};
+
+        ($fullmsg:expr => $type:literal) => {{
+            if $type == "bytes" {
+                use memchr::memmem::find;
+                let i = find($fullmsg, b"\r\n\r\n").expect("lsp message must contain a header");
+                &$fullmsg[i + 4..]
+            } else {
+                &$fullmsg[..]
+            }
+        }};
+    }
+
+    pub(crate) use {lspbody, lspmsg};
+}
+
+#[cfg(test)]
 mod tests {
+    use super::lsp_utils::{lspbody, lspmsg};
     use super::*;
 
     struct MockReader(String);
@@ -167,34 +211,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_read() {
-        let lsp_message = r#"Content-Length: 119
+        let msg1 = lspmsg!("message": "Pyright language server 1.1.399 starting");
+        let msg2 = lspmsg!("hello": "This is a test");
+        let lsp_messages = format!("{}{}", msg1, msg2);
 
-{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"Pyright language server 1.1.399 starting"}}Content-Length: 193
-
-{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"Server root directory: file:///Users/richard/.pyenv/versions/3.13.1/lib/python3.13/site-packages/pyright/dist/dist"}}"#;
-
-        let lsp_message = lsp_message.replace("\n\n", "\r\n\r\n");
-
-        let reader = MockReader(lsp_message.to_string());
+        let reader = MockReader(lsp_messages.to_string());
         let mut frame_reader = LspFramedReader::new(reader);
 
-        let msg = frame_reader.read_messages().await;
+        let msgs = frame_reader.read_messages().await;
 
-        let msg = match msg {
-            Ok(msg) => msg,
-            Err(e) => panic!("{}", e),
-        };
+        assert!(msgs.is_ok());
+        let msgs = msgs.unwrap().unwrap();
 
-        assert!(msg.is_some());
-        let msgs = msg.unwrap();
         assert_eq!(msgs.len(), 2);
-        assert_eq!(
-            msgs[0],
-            r#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"Pyright language server 1.1.399 starting"}}"#
-        );
-        assert_eq!(
-            msgs[1],
-            r#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"Server root directory: file:///Users/richard/.pyenv/versions/3.13.1/lib/python3.13/site-packages/pyright/dist/dist"}}"#
-        );
+        assert_eq!(msgs[0], lspbody!(msg1));
+        assert_eq!(msgs[1], lspbody!(msg2));
     }
 }

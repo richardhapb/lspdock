@@ -50,17 +50,10 @@ where
     let tracker = RequestTracker::new(config.clone());
 
     // The client writes to proxy stdin and proxy writes to LSP stdin
-    let ide_to_server = main_loop(
-        Pair::Client,
-        &cancel,
-        &config,
-        stdin,
-        lsp_stdin,
-        tracker.clone(),
-    );
+    let ide_to_server = main_loop(Pair::Client, &config, stdin, lsp_stdin, tracker.clone());
     // The LSP writes to stdout, and the proxy reads from it. The proxy also writes to its stdout
     // and the client reads from it
-    let server_to_ide = main_loop(Pair::Server, &cancel, &config, lsp_stdout, stdout, tracker);
+    let server_to_ide = main_loop(Pair::Server, &config, lsp_stdout, stdout, tracker);
 
     info!("LSP Proxy: Lsp listening for incoming messages...");
 
@@ -92,7 +85,6 @@ where
 /// Handle the main loop for reading and writing to and from the server/client
 fn main_loop<W, R>(
     pair: Pair,
-    cancel: &CancellationToken,
     config: &ProxyConfig,
     reader: BufReader<R>,
     mut writer: BufWriter<W>,
@@ -102,7 +94,6 @@ where
     W: AsyncWrite + Unpin + Send + 'static,
     R: AsyncRead + Unpin + Send + 'static,
 {
-    let cancel_monitor = cancel.clone();
     let config_clone = config.clone();
     let tracker_inner = tracker.clone();
     let span = match pair {
@@ -117,19 +108,13 @@ where
         async move {
             let mut reader = LspFramedReader::new(reader);
             let mut empty_counter = 0;
-            let cancel_provider = cancel_monitor.clone();
             // The PID patch is required only on the client side for the `initialize` method.
             let mut pid_handler: Option<PidHandler> = match pair {
                 Pair::Server => None,
-                Pair::Client => Some(PidHandler::new(cancel_provider)),
+                Pair::Client => Some(PidHandler::new()),
             };
             loop {
                 tokio::select! {
-                    _ = cancel_monitor.cancelled() => {
-                        info!("task cancelled");
-                        break;
-                    }
-
                     messages = reader.read_messages() => {
                         debug!("Messages has been read");
                         match messages {
@@ -151,15 +136,11 @@ where
 
                                 for mut msg in msgs {
                                     if config_clone.requires_patch_pid() &&
-                                         let Some(ref mut pid_handler_ref) = pid_handler {
-                                            trace!("Trying to take the PID from the initialize method");
-                                            // The function returns true if the take succeeds
-                                            if pid_handler_ref.try_take_initialize_process_id(&mut msg)? {
-                                                debug!("The PID has been captured from the initialize method, setting pid_handler to None");
-                                                // Set the pid_handler to None to avoid attempting to patch the PID again
-                                                if let Some(pid_handler) = pid_handler.take() {
-                                                    tokio::spawn(async move { pid_handler.monitor_pid().await });
-                                            }
+                                    let Some(ref mut pid_handler_ref) = pid_handler {
+                                        trace!("Trying to take the PID from the initialize method");
+                                        // The function returns true if the take succeeds
+                                        if pid_handler_ref.try_take_initialize_process_id(&mut msg)? {
+                                            debug!("The PID has been captured from the initialize method, setting pid_handler to None");
                                         }
                                     }
 

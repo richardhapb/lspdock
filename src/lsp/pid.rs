@@ -1,20 +1,15 @@
 use memchr::memmem::find;
 use serde_json::{Value, json};
-use sysinfo::{Pid, System};
-use tokio_util::{bytes::Bytes, sync::CancellationToken};
-use tracing::{debug, info, trace, warn};
+use tokio_util::bytes::Bytes;
+use tracing::{debug, trace};
 
 pub struct PidHandler {
     pid: Option<u64>,
-    cancel_provider: CancellationToken,
 }
 
 impl PidHandler {
-    pub fn new(cancel_provider: CancellationToken) -> Self {
-        Self {
-            pid: None,
-            cancel_provider,
-        }
+    pub fn new() -> Self {
+        Self { pid: None }
     }
 
     /// Take the processId parameter from the client and store it in the `pid` attribute; set it to null
@@ -45,41 +40,5 @@ impl PidHandler {
 
         trace!(?raw_bytes, "patched");
         Ok(true)
-    }
-
-    /// Monitor periodically if the PID is running
-    pub async fn monitor_pid(&self) {
-        debug!(?self.pid, "Initializing PID monitoring");
-
-        loop {
-            if !self.is_pid_running() {
-                info!(
-                    "PID {:?} is not running; shutting down the process",
-                    self.pid
-                );
-                self.cancel_provider.cancel();
-                break;
-            }
-            trace!(?self.pid, "Is running");
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        }
-    }
-
-    /// Check if the PID is running
-    fn is_pid_running(&self) -> bool {
-        if let Some(pid) = self.pid {
-            trace!("Checking if PID {} is running", pid);
-
-            let mut system = System::new_all();
-            system.refresh_all();
-
-            let target_pid = Pid::from_u32(pid as u32);
-            system.process(target_pid).is_some()
-        } else {
-            warn!("No PID for capturing");
-            // By default indicate that the IDE is running because
-            // We can't know if it is running
-            true
-        }
     }
 }

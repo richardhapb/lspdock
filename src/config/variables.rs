@@ -131,6 +131,7 @@ mod tests {
             executable: "rust_analyzer".into(),
             patch_pid: None,
             use_docker: false,
+            encoded_local_path: None,
         };
 
         par_var.expand(&mut config).unwrap();

@@ -32,13 +32,16 @@ impl PidHandler {
 
         let mut v: Value = serde_json::from_slice(raw_bytes.as_ref())?;
         if let Some(process_id) = v.pointer_mut("/params/processId") {
+            debug!(
+                "The PID has been captured from the initialize method, setting pid_handler to None"
+            );
             self.pid = process_id.as_u64();
             trace!(self.pid, "captured PID");
             *process_id = json!("null");
+            *raw_bytes = Bytes::from(serde_json::to_vec(&v)?);
+            trace!(?raw_bytes, "patched");
         }
-        *raw_bytes = Bytes::from(serde_json::to_vec(&v)?);
 
-        trace!(?raw_bytes, "patched");
         Ok(true)
     }
 }

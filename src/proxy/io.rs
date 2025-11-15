@@ -29,7 +29,7 @@ pub enum Pair {
 pub async fn forward_proxy<W, R>(
     lsp_stdin: BufWriter<W>,
     lsp_stdout: BufReader<R>,
-    config: ProxyConfig,
+    mut config: ProxyConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     W: AsyncWrite + Unpin + Send + 'static,
@@ -50,10 +50,10 @@ where
     let tracker = RequestTracker::new(config.clone());
 
     // The client writes to proxy stdin and proxy writes to LSP stdin
-    let ide_to_server = main_loop(Pair::Client, &config, stdin, lsp_stdin, tracker.clone());
+    let ide_to_server = main_loop(Pair::Client, &mut config, stdin, lsp_stdin, tracker.clone());
     // The LSP writes to stdout, and the proxy reads from it. The proxy also writes to its stdout
     // and the client reads from it
-    let server_to_ide = main_loop(Pair::Server, &config, lsp_stdout, stdout, tracker);
+    let server_to_ide = main_loop(Pair::Server, &mut config, lsp_stdout, stdout, tracker);
 
     info!("LSP Proxy: Lsp listening for incoming messages...");
 
@@ -85,7 +85,7 @@ where
 /// Handle the main loop for reading and writing to and from the server/client
 fn main_loop<W, R>(
     pair: Pair,
-    config: &ProxyConfig,
+    config: &mut ProxyConfig,
     reader: BufReader<R>,
     mut writer: BufWriter<W>,
     tracker: RequestTracker,
@@ -94,7 +94,8 @@ where
     W: AsyncWrite + Unpin + Send + 'static,
     R: AsyncRead + Unpin + Send + 'static,
 {
-    let config_clone = config.clone();
+    #[allow(unused_mut)] // Not used in Unix
+    let mut config_clone = config.clone();
     let tracker_inner = tracker.clone();
     let span = match pair {
         Pair::Client => {
@@ -108,6 +109,7 @@ where
         async move {
             let mut reader = LspFramedReader::new(reader);
             let mut empty_counter = 0;
+            let mut pid_patched = false;
             // The PID patch is required only on the client side for the `initialize` method.
             let mut pid_handler: Option<PidHandler> = match pair {
                 Pair::Server => None,
@@ -136,15 +138,27 @@ where
 
                                 for mut msg in msgs {
                                     if config_clone.requires_patch_pid() &&
+                                    !pid_patched &&
                                     let Some(ref mut pid_handler_ref) = pid_handler {
                                         trace!("Trying to take the PID from the initialize method");
+
                                         // The function returns true if the take succeeds
-                                        if pid_handler_ref.try_take_initialize_process_id(&mut msg)? {
-                                            debug!("The PID has been captured from the initialize method, setting pid_handler to None");
+                                        pid_patched = pid_handler_ref.try_take_initialize_process_id(&mut msg)?;
+
+                                        if pid_patched {
+                                            // If it is in initialize method, capture the
+                                            // colon encoding in Windows
+                                            #[cfg(windows)]
+                                            {
+                                                debug!("Capturing semicolon config in windows");
+                                                use crate::lsp::binding::encode_path;
+                                                encode_path(&msg, &mut config_clone);
+                                            }
                                         }
                                     }
 
                                     if config_clone.use_docker {
+
                                         redirect_uri(&mut msg, &pair, &config_clone)?;
                                         tracker_inner.check_for_methods(GOTO_METHODS, &mut msg, &pair).await?;
                                     }

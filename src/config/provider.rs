@@ -45,13 +45,16 @@ pub struct ProxyConfig {
     /// This serves as a pattern for the proxy to Docker; if the pattern doesn't match, the proxy will
     /// forward requests directly to the local LSP.
     pub pattern: Option<String>,
-    #[serde(skip)]
-    pub use_docker: bool,
 
     /// Indicates whether to patch the PID to null; this is used when the LSP tries to track the IDE and
     /// auto-kill when it can't detect it. The listed executables in this list will be patched
     pub patch_pid: Option<Vec<String>>,
     pub log_level: Option<String>,
+
+    #[serde(skip)]
+    pub use_docker: bool,
+    #[serde(skip)]
+    pub encoded_local_path: Option<String>,
 }
 
 impl ProxyConfig {
@@ -104,7 +107,7 @@ impl ProxyConfig {
 }
 
 // Helper function to normalize paths
-#[cfg(windows)]
+#[allow(dead_code)] // In unix is not used
 fn normalize_win_local(path: &str) -> String {
     let mut s = std::path::Path::new(path).to_string_lossy().to_string();
     s = s.replace('\\', "/");
@@ -140,17 +143,15 @@ fn cwd_matches_pattern(cwd: &Path, pattern: Option<&str>) -> bool {
     }
 }
 
-#[cfg(all(test, windows))]
-mod tests {
+#[cfg(test)]
+mod windows_tests {
     use super::*;
+
     #[test]
     fn windows_normalize_local() {
         let local_path = "C:\\Users\\testUser\\dev";
         let normalized = normalize_win_local(local_path);
 
-        assert_eq!(
-            normalized,
-            format!("/{}", local_path.replace("\\", "/").replace("C:", "c:")),
-        );
+        assert_eq!(normalized, "/c:/Users/testUser/dev");
     }
 }

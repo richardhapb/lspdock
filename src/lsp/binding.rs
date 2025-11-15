@@ -301,6 +301,63 @@ pub fn encode_path(msg: &Bytes, config: &mut ProxyConfig) {
     }
 }
 
+pub fn ensure_root(msg: &mut Bytes, config: &ProxyConfig) {
+    let docker_uri = format!("file://{}", config.docker_internal_path);
+
+    // Patch rootUri
+    let key = b"\"rootUri\":\"";
+    if let Some(mut beg) = find(msg, key) {
+        beg += key.len();
+        if let Some(mut end) = find(&msg[beg..], b"\"") {
+            end += beg; // Make it absolute position
+            let before = &msg[..beg];
+            let after = &msg[end..];
+            *msg = Bytes::from([before, docker_uri.as_bytes(), after].concat());
+        }
+    }
+
+    // Patch rootPath if present
+    let key = b"\"rootPath\":\"";
+    if let Some(mut beg) = find(msg, key) {
+        beg += key.len();
+        if let Some(mut end) = find(&msg[beg..], b"\"") {
+            end += beg;
+            let before = &msg[..beg];
+            let after = &msg[end..];
+            *msg = Bytes::from([before, docker_uri.as_bytes(), after].concat());
+        }
+    }
+
+    let key = b"\"workspaceFolders\":[";
+    if let Some(mut beg) = find(msg, key) {
+        beg += key.len();
+        if let Some(mut end) = find(&msg[beg..], b"]") {
+            end += beg;
+            let before = &msg[..beg];
+            let after = &msg[end..];
+            if let Some(ws) = patch_workspace_folders(&msg[beg..end], &docker_uri) {
+                *msg = Bytes::from([before, &ws, after].concat());
+            }
+        }
+    }
+}
+
+fn patch_workspace_folders(msg: &[u8], docker_uri: &str) -> Option<Bytes> {
+    let key = b"\"uri\":\"";
+    let mut result = None;
+    for uri_beg in find_iter(msg, key) {
+        let beg = uri_beg + key.len();
+        if let Some(mut end) = find(&msg[beg..], b"\"") {
+            end += beg;
+            let before = &msg[..beg];
+            let after = &msg[end..];
+            result = Some(Bytes::from([before, docker_uri.as_bytes(), after].concat()));
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,6 +421,25 @@ mod tests {
             lspbody!(&request => "bytes"),
             lspbody!(&expected => "bytes")
         );
+    }
+
+    #[test]
+    fn ensure_root_patches_correctly() {
+        let mut config = construct_config();
+        config.local_path = "/test/path/app".to_string();
+
+        let msg = lspmsg!(
+            "method": "initialize",
+            "rootUri": "file:///test/path",
+            "rootPath": "/test/path"
+        );
+
+        let mut request = Bytes::from(msg);
+        ensure_root(&mut request, &config);
+
+        let body = lspbody!(&request => "string");
+        assert!(find(body, b"\"rootUri\":\"file:///usr/home/app\"").is_some());
+        assert!(find(body, b"\"rootPath\":\"file:///usr/home/app\"").is_some());
     }
 }
 

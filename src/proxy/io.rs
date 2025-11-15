@@ -1,8 +1,9 @@
+use memchr::memmem::find;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use crate::lsp::{
-    binding::{RequestTracker, redirect_uri},
+    binding::{RequestTracker, ensure_root, redirect_uri},
     parser::{LspFramedReader, send_message},
     pid::PidHandler,
 };
@@ -109,7 +110,7 @@ where
         async move {
             let mut reader = LspFramedReader::new(reader);
             let mut empty_counter = 0;
-            let mut pid_patched = false;
+            let mut lsp_initialized = false;
             // The PID patch is required only on the client side for the `initialize` method.
             let mut pid_handler: Option<PidHandler> = match pair {
                 Pair::Server => None,
@@ -137,15 +138,14 @@ where
                                 }
 
                                 for mut msg in msgs {
-                                    if config_clone.requires_patch_pid() &&
-                                    !pid_patched &&
-                                    let Some(ref mut pid_handler_ref) = pid_handler {
-                                        trace!("Trying to take the PID from the initialize method");
+                                    if config_clone.use_docker {
+                                        if !lsp_initialized && find(&msg, br#""method":"initialize""#).is_some() {
+                                            lsp_initialized = true;
 
-                                        // The function returns true if the take succeeds
-                                        pid_patched = pid_handler_ref.try_take_initialize_process_id(&mut msg)?;
+                                            ensure_root(&mut msg, &config_clone);
 
-                                        if pid_patched {
+                                            trace!("Initialize method found");
+
                                             // If it is in initialize method, capture the
                                             // colon encoding in Windows
                                             #[cfg(windows)]
@@ -154,14 +154,20 @@ where
                                                 use crate::lsp::binding::encode_path;
                                                 encode_path(&msg, &mut config_clone);
                                             }
-                                        }
-                                    }
 
-                                    if config_clone.use_docker {
+                                            if config_clone.requires_patch_pid() &&
+                                            let Some(ref mut pid_handler_ref) = pid_handler {
+                                                trace!("Trying to take the PID from the initialize method");
+
+                                                // The function returns true if the take succeeds
+                                                pid_handler_ref.try_take_initialize_process_id(&mut msg)?;
+                                            }
+                                        }
 
                                         redirect_uri(&mut msg, &pair, &config_clone)?;
                                         tracker_inner.check_for_methods(GOTO_METHODS, &mut msg, &pair).await?;
                                     }
+
                                     send_message(&mut writer, &msg).await.map_err(|e| {
                                         error!("Failed to forward the request: {}", e);
                                         e

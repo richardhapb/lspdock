@@ -1,4 +1,3 @@
-use memchr::memmem::find;
 use serde_json::{Value, json};
 use tokio_util::bytes::Bytes;
 use tracing::{debug, trace};
@@ -21,12 +20,7 @@ impl PidHandler {
     pub fn try_take_initialize_process_id(
         &mut self,
         raw_bytes: &mut Bytes,
-    ) -> serde_json::error::Result<bool> {
-        if find(raw_bytes, br#""method":"initialize""#).is_none() {
-            trace!("Initialize method not found, skipping patch");
-            return Ok(false);
-        }
-
+    ) -> serde_json::error::Result<()> {
         debug!("Initialize method found, patching");
         trace!(?raw_bytes, "before patch");
 
@@ -42,6 +36,6 @@ impl PidHandler {
             trace!(?raw_bytes, "patched");
         }
 
-        Ok(true)
+        Ok(())
     }
 }

@@ -68,6 +68,7 @@ impl ProxyConfig {
         // Normalize local path for Windows
         #[cfg(windows)]
         let local_path = local_path.map(|p| normalize_win_local(&p));
+
         let local_path = local_path.ok_or(ConfigParseError::MissingField("local_path"))?;
 
         let mut executable = extract_binary_name(&env::args().next().unwrap_or("".to_string()));

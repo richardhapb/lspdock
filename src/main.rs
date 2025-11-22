@@ -45,6 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer().with_writer(file_path))
         .init();
 
+    debug!(?config_path);
     debug!(?config, "configuration file");
 
     info!("Initializing LSP");

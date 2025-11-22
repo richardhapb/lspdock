@@ -10,11 +10,13 @@ pub use provider::{ProxyConfig, ProxyConfigToml, encode_path};
 
 const CONFIG_NAME: &str = "lspdock.toml";
 
+#[derive(Debug)]
 pub enum PathType {
     Cwd,
     Home,
 }
 
+#[derive(Debug)]
 pub struct ConfigPath {
     path: PathBuf,
     r#type: PathType,

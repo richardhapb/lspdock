@@ -37,7 +37,8 @@ flowchart TD
 - **Match container environment**: If a method like `textDocument/definition` points to a third-party library inside a container, that file will be cloned into the local environment, allowing the IDE to navigate to it.
 - **Configurable Variables**: Customize paths and behavior using environment variables and configuration files.
 - **Logging**: Detailed logs for debugging and monitoring.
-- **Fallback**: If cannot attach to Docker, fallback to local environment, this allows use the proxy everywhere
+- **Zero-config mode**: Run without a configuration file - just pass the LSP executable name and lspdock works as a transparent proxy. Perfect for testing or simple setups where Docker isn't needed.
+- **Automatic fallback**: If Docker container is not found or not running, lspdock automatically falls back to running the LSP locally. This allows you to use the same configuration everywhere without worrying about Docker availability.
 
 ---
 

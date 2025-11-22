@@ -58,7 +58,7 @@ pub struct ProxyConfig {
 impl ProxyConfig {
     pub fn from_proxy_config_toml(
         config: ProxyConfigToml,
-        use_docker: bool,
+        mut use_docker: bool,
     ) -> Result<Self, ConfigParseError> {
         #[allow(unused_mut)]
         let local_path = config
@@ -68,7 +68,6 @@ impl ProxyConfig {
         // Normalize local path for Windows
         #[cfg(windows)]
         let local_path = local_path.map(|p| normalize_win_local(&p));
-
         let local_path = local_path.ok_or(ConfigParseError::MissingField("local_path"))?;
 
         let mut executable = extract_binary_name(&env::args().next().unwrap_or("".to_string()));
@@ -81,13 +80,14 @@ impl ProxyConfig {
                 .ok_or(ConfigParseError::MissingField("executable"))?;
         }
 
-        let container = config
-            .container
-            .ok_or(ConfigParseError::MissingField("container"))?;
+        // Auto-disable Docker if required fields missing (zero-config mode)
+        if config.container.is_none() || config.docker_internal_path.is_none() {
+            use_docker = false;
+        }
 
-        let docker_internal_path = config
-            .docker_internal_path
-            .ok_or(ConfigParseError::MissingField("docker path"))?;
+        // Use empty strings as placeholders when Docker is disabled
+        let container = config.container.unwrap_or_default();
+        let docker_internal_path = config.docker_internal_path.unwrap_or_default();
 
         Ok(Self {
             container,

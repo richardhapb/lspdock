@@ -8,7 +8,6 @@ mod proxy;
 
 use tokio::io::{BufReader, BufWriter};
 
-use config::ProxyConfigToml;
 use proxy::forward_proxy;
 
 use crate::config::{Cli, ProxyConfig, resolve_config_path};
@@ -17,7 +16,7 @@ use crate::config::{Cli, ProxyConfig, resolve_config_path};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut cli: Cli = Cli::parse();
     let config_path = resolve_config_path();
-    let config = ProxyConfigToml::from_file(config_path.as_ref(), &mut cli).map_err(|e| {
+    let mut config = ProxyConfig::from_file(config_path.as_ref(), &mut cli).map_err(|e| {
         eprintln!("Error retrieving config: {e}");
         e
     })?;
@@ -50,10 +49,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Initializing LSP");
 
-    let mut using_docker = config.use_docker;
-
     // Check if Docker container exists before trying to use it
-    if using_docker {
+    if config.use_docker {
         let container_check = Command::new("docker")
             .args(["inspect", "-f", "{{.State.Running}}", &config.container])
             .output();
@@ -63,23 +60,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let running = String::from_utf8_lossy(&output.stdout).trim() == "true";
                 if !running {
                     warn!(container=%config.container, "Container exists but is not running, falling back to local");
-                    using_docker = false;
+                    config.use_docker = false;
                 } else {
                     debug!(container=%config.container, "Container is running");
                 }
             }
             Ok(_) => {
                 warn!(container=%config.container, "Container not found, falling back to local");
-                using_docker = false;
+                config.use_docker = false;
             }
             Err(e) => {
                 warn!(%e, "Failed to check Docker, falling back to local");
-                using_docker = false;
+                config.use_docker = false;
             }
         }
     }
 
-    let (cmd, cmd_args) = if using_docker {
+    let (cmd, cmd_args) = if config.use_docker {
         let cmd = vec![
             "exec".into(),
             "-i".into(),
@@ -109,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stdout = BufReader::new(child.stdout.take().unwrap());
     let stdin = BufWriter::new(child.stdin.take().unwrap());
 
-    if using_docker {
+    if config.use_docker {
         info!(%config.container, "Attached to stdout/stdin");
     } else {
         info!(%config.executable, "Attached to stdout/stdin (local)");

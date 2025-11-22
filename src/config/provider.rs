@@ -56,6 +56,46 @@ pub struct ProxyConfig {
 }
 
 impl ProxyConfig {
+    pub fn from_file(
+        config_path: Option<&ConfigPath>,
+        cli: &mut Cli,
+    ) -> Result<Self, ConfigParseError> {
+        let mut config = ProxyConfigToml::default();
+        if let Some(cp) = config_path {
+            let file_str = std::fs::read_to_string(&cp.path)?;
+            config = toml::from_str(&file_str)?;
+        }
+
+        // Cli has precedence in priority
+        config.container = cli.container.take().or(config.container);
+        config.local_path = cli.local_path.take().or(config.local_path);
+        config.docker_internal_path = cli.docker_path.take().or(config.docker_internal_path);
+        config.executable = cli.exec.take().or(config.executable);
+        config.pattern = cli.pattern.take().or(config.pattern);
+        config.patch_pid = cli.pids.take().or(config.patch_pid);
+        config.log_level = cli.log_level.take().or(config.log_level);
+
+        let cwd_var = VariableCwd::default();
+        let parent_var = VariableParent::default();
+        let home_var = VariableHome::default();
+        cwd_var.expand(&mut config).unwrap();
+        parent_var.expand(&mut config).unwrap();
+        home_var.expand(&mut config).unwrap();
+
+        let use_docker = match config_path {
+            Some(cp) => match cp.r#type {
+                PathType::Home => {
+                    let cwd = current_dir()?;
+                    cwd_matches_pattern(&cwd, config.pattern.as_deref())
+                }
+                PathType::Cwd => true, // In cwd always the pattern matches
+            },
+            None => true,
+        };
+
+        Self::from_proxy_config_toml(config, use_docker)
+    }
+
     pub fn from_proxy_config_toml(
         config: ProxyConfigToml,
         mut use_docker: bool,
@@ -133,48 +173,6 @@ pub struct ProxyConfigToml {
     /// auto-kill when it can't detect it. The listed executables in this list will be patched
     pub(super) patch_pid: Option<Vec<String>>,
     pub(super) log_level: Option<String>,
-}
-
-impl ProxyConfigToml {
-    pub fn from_file(
-        config_path: Option<&ConfigPath>,
-        cli: &mut Cli,
-    ) -> Result<ProxyConfig, ConfigParseError> {
-        let mut config = Self::default();
-        if let Some(cp) = config_path {
-            let file_str = std::fs::read_to_string(&cp.path)?;
-            config = toml::from_str(&file_str)?;
-        }
-
-        // Cli has precedence in priority
-        config.container = cli.container.take().or(config.container);
-        config.local_path = cli.local_path.take().or(config.local_path);
-        config.docker_internal_path = cli.docker_path.take().or(config.docker_internal_path);
-        config.executable = cli.exec.take().or(config.executable);
-        config.pattern = cli.pattern.take().or(config.pattern);
-        config.patch_pid = cli.pids.take().or(config.patch_pid);
-        config.log_level = cli.log_level.take().or(config.log_level);
-
-        let cwd_var = VariableCwd::default();
-        let parent_var = VariableParent::default();
-        let home_var = VariableHome::default();
-        cwd_var.expand(&mut config).unwrap();
-        parent_var.expand(&mut config).unwrap();
-        home_var.expand(&mut config).unwrap();
-
-        let use_docker = match config_path {
-            Some(cp) => match cp.r#type {
-                PathType::Home => {
-                    let cwd = current_dir()?;
-                    cwd_matches_pattern(&cwd, config.pattern.as_deref())
-                }
-                PathType::Cwd => true, // In cwd always the pattern matches
-            },
-            None => true,
-        };
-
-        ProxyConfig::from_proxy_config_toml(config, use_docker)
-    }
 }
 
 fn extract_binary_name(full_path: &str) -> String {

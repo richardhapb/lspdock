@@ -1,9 +1,9 @@
 use std::{env::current_dir, ffi::OsStr, ops::Deref};
 
-use crate::config::ProxyConfig;
+use super::ProxyConfigToml;
 
 pub trait VariableResolver {
-    fn expand(self, config: &mut ProxyConfig) -> Result<(), Box<dyn std::error::Error>>;
+    fn expand(self, config: &mut ProxyConfigToml) -> Result<(), Box<dyn std::error::Error>>;
 }
 
 /// Base struct for variable resolvers that have a simple name field
@@ -53,7 +53,7 @@ impl Default for VariableHome {
 }
 
 impl VariableResolver for VariableCwd {
-    fn expand(self, config: &mut ProxyConfig) -> Result<(), Box<dyn std::error::Error>> {
+    fn expand(self, config: &mut ProxyConfigToml) -> Result<(), Box<dyn std::error::Error>> {
         let var = format!("${}", self.0.name.to_uppercase());
         let cwd = current_dir()?;
         let expanded = cwd
@@ -66,7 +66,7 @@ impl VariableResolver for VariableCwd {
 }
 
 impl VariableResolver for VariableParent {
-    fn expand(self, config: &mut ProxyConfig) -> Result<(), Box<dyn std::error::Error>> {
+    fn expand(self, config: &mut ProxyConfigToml) -> Result<(), Box<dyn std::error::Error>> {
         let var = format!("${}", self.0.name.to_uppercase());
         let cwd = current_dir()?;
         let parent = cwd.file_name().unwrap_or(OsStr::new(""));
@@ -80,7 +80,7 @@ impl VariableResolver for VariableParent {
 }
 
 impl VariableResolver for VariableHome {
-    fn expand(self, config: &mut ProxyConfig) -> Result<(), Box<dyn std::error::Error>> {
+    fn expand(self, config: &mut ProxyConfigToml) -> Result<(), Box<dyn std::error::Error>> {
         let var = format!("${}", self.0.name.to_uppercase());
         let home =
             dirs::home_dir().ok_or_else(|| "Could not retrieve home directory".to_string())?;
@@ -93,23 +93,19 @@ impl VariableResolver for VariableHome {
     }
 }
 
-fn expand_into_config(config: &mut ProxyConfig, var: &str, expanded: &str) {
-    let pattern_exists = config.pattern.is_some();
+fn expand_into_config(config: &mut ProxyConfigToml, var: &str, expanded: &str) {
     let fields = [
         &mut config.container,
-        &mut config.local_path,
-        &mut config.executable,
         &mut config.docker_internal_path,
-        config.pattern.get_or_insert_with(String::new),
+        &mut config.executable,
+        &mut config.local_path,
+        &mut config.pattern,
     ];
 
     for field in fields {
-        *field = field.replace(var, expanded);
-    }
-
-    // Restore the original pattern if it does not exist
-    if !pattern_exists {
-        config.pattern = None
+        if let Some(f) = field {
+            *field = Some(f.replace(var, expanded));
+        }
     }
 }
 
@@ -122,16 +118,11 @@ mod tests {
         let par_var = VariableParent::default();
         let cwd_var = VariableCwd::default();
         let home_var = VariableHome::default();
-        let mut config = ProxyConfig {
-            container: "$PARENT-web-1".into(),
-            local_path: "$CWD/app".into(),
-            docker_internal_path: "/some/path".into(),
+        let mut config = ProxyConfigToml {
+            container: Some("$PARENT-web-1".into()),
+            local_path: Some("$CWD/app".into()),
             pattern: Some("$HOME/dev".into()),
-            log_level: None,
-            executable: "rust_analyzer".into(),
-            patch_pid: None,
-            use_docker: false,
-            encoded_local_path: None,
+            ..Default::default()
         };
 
         par_var.expand(&mut config).unwrap();
@@ -145,8 +136,8 @@ mod tests {
         let home = dirs::home_dir().unwrap();
         let home = home.to_str().unwrap();
 
-        assert_eq!(config.container, format!("{parent}-web-1"));
-        assert_eq!(config.local_path, format!("{cwd}/app"));
+        assert_eq!(config.container, Some(format!("{parent}-web-1")));
+        assert_eq!(config.local_path, Some(format!("{cwd}/app")));
         assert_eq!(config.pattern.unwrap(), format!("{home}/dev"));
     }
 }

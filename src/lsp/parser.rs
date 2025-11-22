@@ -101,7 +101,6 @@ impl<R: AsyncRead + Unpin> LspFramedReader<R> {
             return Ok(None); // need more bytes
         }
 
-        // Zero-copy-ish: slice then to_string
         let body = self.buffer[message_start..message_end].to_vec();
 
         Ok(Some((Bytes::from(body), message_end)))

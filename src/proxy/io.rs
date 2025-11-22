@@ -151,7 +151,7 @@ where
                                             #[cfg(windows)]
                                             {
                                                 debug!("Capturing semicolon config in windows");
-                                                use crate::lsp::binding::encode_path;
+                                                use crate::config::encode_path;
                                                 encode_path(&msg, &mut config_clone);
                                             }
 

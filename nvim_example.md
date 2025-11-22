@@ -66,7 +66,7 @@ Configure it in `after/lsp/lspdock_ruff.lua`.
 ```lua
 return {
   -- This is the important part
-  cmd = { "lspdock", "--exec", "ruff", 'server' },
+  cmd = { "lspdock", "--exec", "ruff", "--", 'server' },
   -- Optional for verbose logs
   cmd_env = { RUST_LOG = "none,lspdock=trace" },
 
@@ -102,7 +102,7 @@ Then
 --- lspdock_pyright.lua
 return {
   -- This is the important part
-  cmd = { "lspdock", "--exec", "pyright-langserver", '--stdio' },
+  cmd = { "lspdock", "--exec", "pyright-langserver", "--", '--stdio' },
 
   -- Normal config
   filetypes = { "python" },

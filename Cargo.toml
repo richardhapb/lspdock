@@ -1,9 +1,10 @@
 [package]
 name = "lspdock"
-version = "0.1.8"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
+clap = { version = "4.5.53", features = ["derive"] }
 dirs = "6.0.0"
 futures-core = "0.3.31"
 memchr = "2.7.6"

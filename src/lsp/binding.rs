@@ -25,19 +25,12 @@ pub fn redirect_uri(
 
     match from {
         Pair::Client => {
-            from_path = match &config.encoded_local_path {
-                Some(p) => p.as_bytes(),
-                None => config.local_path.as_bytes(),
-            };
-
+            from_path = config.local_path.as_bytes();
             to_path = config.docker_internal_path.as_bytes();
         }
         Pair::Server => {
             from_path = config.docker_internal_path.as_bytes();
-            to_path = match &config.encoded_local_path {
-                Some(p) => p.as_bytes(),
-                None => config.local_path.as_bytes(),
-            };
+            to_path = config.local_path.as_bytes();
         }
     }
 
@@ -292,15 +285,6 @@ impl RequestTracker {
     }
 }
 
-#[allow(dead_code)] // Not used in Unix
-pub fn encode_path(msg: &Bytes, config: &mut ProxyConfig) {
-    config.encoded_local_path = if find(msg, b"%3A").is_some() {
-        Some(config.local_path.replace(":", "%3A"))
-    } else {
-        Some(config.local_path.clone())
-    }
-}
-
 pub fn ensure_root(msg: &mut Bytes, config: &ProxyConfig) {
     let docker_uri = format!("file://{}", config.docker_internal_path);
 
@@ -365,15 +349,9 @@ mod tests {
 
     fn construct_config() -> ProxyConfig {
         ProxyConfig {
-            container: "test".into(),
             local_path: "/test/path".into(),
             docker_internal_path: "/usr/home/app".into(),
-            executable: "somelsp".into(),
-            pattern: Some("/test".into()),
-            use_docker: true,
-            log_level: None,
-            patch_pid: None,
-            encoded_local_path: None,
+            ..Default::default()
         }
     }
 
@@ -459,15 +437,9 @@ mod windows_tests {
     #[test]
     fn windows_use_escaped_colon() {
         let config = ProxyConfig {
-            container: "test".into(),
-            local_path: "C:/Users/testUser/dev".into(),
+            local_path: "/c%3A/Users/testUser/dev".into(),
             docker_internal_path: "/usr/home/app".into(),
-            executable: "somelsp".into(),
-            pattern: Some("/test".into()),
-            use_docker: true,
-            log_level: None,
-            patch_pid: None,
-            encoded_local_path: Some("/c%3A/Users/testUser/dev".into()),
+            ..Default::default()
         };
 
         let msg_with_sc = lspmsg!("uri": "/c%3A/Users/testUser/dev/somefile.rs");
@@ -478,46 +450,5 @@ mod windows_tests {
         let new_msg = String::from_utf8_lossy(&msg_bytes);
 
         assert_eq!(lspbody!(new_msg), lspbody!(msg_expected));
-    }
-
-    #[test]
-    fn windows_detect_colon_type() {
-        let mut config = ProxyConfig {
-            container: "test".into(),
-            local_path: "/c:/Users/testUser/dev".into(),
-            docker_internal_path: "/usr/home/app".into(),
-            executable: "somelsp".into(),
-            pattern: Some("/test".into()),
-            use_docker: true,
-            log_level: None,
-            patch_pid: None,
-            encoded_local_path: None,
-        };
-
-        // Encoded
-
-        let msg_with_sc = lspmsg!("uri": "/c%3A/Users/testUser/dev/somefile.rs");
-        let msg_bytes = Bytes::from(msg_with_sc);
-
-        encode_path(&msg_bytes, &mut config);
-
-        assert!(config.encoded_local_path.is_some());
-        assert_eq!(
-            config.encoded_local_path,
-            Some("/c%3A/Users/testUser/dev".into())
-        );
-
-        // With raw colon
-
-        let msg_with_sc = lspmsg!("uri": "/c:/Users/testUser/dev/somefile.rs");
-        let msg_bytes = Bytes::from(msg_with_sc);
-
-        encode_path(&msg_bytes, &mut config);
-
-        assert!(config.encoded_local_path.is_some());
-        assert_eq!(
-            config.encoded_local_path,
-            Some("/c:/Users/testUser/dev".into())
-        );
     }
 }

@@ -37,6 +37,7 @@ flowchart TD
 - **Match container environment**: If a method like `textDocument/definition` points to a third-party library inside a container, that file will be cloned into the local environment, allowing the IDE to navigate to it.
 - **Configurable Variables**: Customize paths and behavior using environment variables and configuration files.
 - **Logging**: Detailed logs for debugging and monitoring.
+- **Fallback**: If cannot attach to Docker, fallback to local environment, this allows use the proxy everywhere
 
 ---
 
@@ -72,6 +73,8 @@ Download the [release](https://github.com/richardhapb/lspdock/releases) for your
 
 ## Configuration
 
+The configuration file is optional, in that case, at least the `container`, `docker_internal_path` and `executable` will be passed as a CLI argument. See [CLI arguments](#cli-arguments) for more details.
+
 `LSPDock` uses the following configuration hierarchy: if the top configuration file is present, use that configuration. Use one configuration file at a time. If an option is not present and the next config file contains it, that option will not be used.
 
 ```
@@ -88,14 +91,20 @@ container = "my-container"
 # Path inside the Docker container
 docker_internal_path = "/usr/src/app"
 
-# Path on the host machine
+# Optional: Path on the host machine, default at the CWD (current working directory)
 local_path = "/home/richard/dev/project"
 
-# Executable for the LSP server (this will be overwritten if the --exec arg is passed)
+# Optional: Executable for the LSP server
+# The priority to resolve the executable name is:
+# --exec arg if passed
+# proxy binary name, if it is different to lspdock, e.g. if you rename the binary to pyright-langserver, that executable will be used
+# executable field in config, this option
+#
+# Panic if any of them are provided
 executable = "pyright-langserver"
 
-# Pattern to determine whether Docker should be used. If it is not provided, Docker will always be used. If the configuration file is in the project directory,
-# it is a good idea to omit this argument.
+# Optional: Pattern to determine whether Docker should be used. If it is not provided, Docker will always be used. If the configuration file is 
+# in the project directory, it is a good idea to omit this argument.
 pattern = "/home/richard/dev"
 
 # Optional: Controls PID handling for LSP servers that track client processes
@@ -109,6 +118,10 @@ log_level = "debug"
 ```
 
 If the pattern is not present in the current working directory, the proxy acts as the target LSP, without changing anything, and redirects it directly. Also, the logs of the messages continue to be captured and written to the log file.
+
+### Use the proxy as a replacement of the LSP executable
+
+In some circunstances is useful to use LPSDock as a replacement to an original  executable, for example if your IDE allows to indicate the executable to use, you can rename the name of LSPDock to your desired executable, and that name will be used to resolve the executable in Docker. For instance, if you rename the `lspdock` executable to `pyright-langserver`, this last name will be used. If the lspdock has its original name, then the executable indicated in config will be used. In Windows the `.exe` extension will be ignored, that means: `pyright-langserver.exe` resolves to `pyright-langserver`.
 
 ### PID Patching Explained
 
@@ -131,24 +144,33 @@ When `patch_pid` is configured, LSPDock will:
 
 This feature ensures a smooth experience with LSP servers that would otherwise terminate prematurely when they can't detect your editor's process.
 
-### Handle multiple LSPs for the same project
+### Handle multiple LSPs
 
-To handle different LSPs for the same project, the trick is to pass the `--exec` argument to `lspdock`. This argument must be the first and has the following format:
+#### Option 1
+
+To handle different LSPs, pass the `--exec` argument to `lspdock`. This argument must be the first and has the following format:
 
 ```text
-lspdock --exec [executable-name] {LSP's arguments}
+lspdock --exec [executable-name] -- {LSP's arguments}
 ```
+
+All the arguments passed after `--` will be passed to the LSP.
 
 Examples:
 
 ```bash
-lspdock --exec pyright-langserver --stdio
-lspdock --exec ruff server
+lspdock --exec pyright-langserver -- --stdio
+lspdock --exec ruff -- server
 ```
 
 To handle this, you should customize your IDE's command to pass the `--exec` argument; this argument will override the `executable` parameter in the config file.
 
 See the [neovim example](nvim_example.md) for a custom use of multiple LSPs using Neovim.
+
+
+#### Option 2
+
+Rename the `lspdock` executable to the name of your LSP. For example, you can rename `lspdock` to `pyright-langserver`, then the `pyright-langserver` will be used.
 
 ### Available Variables
 
@@ -193,6 +215,53 @@ Logs are written to a temporary directory. On Unix systems, this is located at `
 tail -f /tmp/lspdock_rust-analyzer.log
 ```
 
+
+## CLI Arguments <a id="cli-arguments"></a>
+
+The following arguments can be used. These arguments take precedence over the config file. If an argument is provided, the config file field (if it exists) will be overridden. All arguments passed after `--` will be forwarded to the LSP. If any of these arguments are included, and the LSP arguments are passed directly, e.g. `lspdock --stdio`, all arguments will be sent directly to the LSP.
+
+```text
+Usage: lspdock [OPTIONS] [-- <ARGS>...]
+
+Arguments:
+  [ARGS]...  Arguments to pass to the LSP
+
+Options:
+  -c, --container <CONTAINER>      Container for attachment
+  -d, --docker-path <DOCKER_PATH>  Docker internal path
+  -L, --local-path <LOCAL_PATH>    Local path
+  -e, --exec <EXEC>                Executable for the LSP
+      --pids <PIDS>                PID patching: indicate the LSPs that require PID patching to null
+  -p, --pattern <PATTERN>          Path pattern; this pattern indicates whether Docker will be used. Docker will be used if the current working directory matches the pattern or is a child of it
+  -l, --log-level <LOG_LEVEL>      Log level: can be trace, debug, info, warning or error
+  -h, --help                       Print help
+  -V, --version                    Print version
+```
+
+### When to Use `--`
+
+Use the `--` separator to avoid ambiguity when your LSP server has flags that conflict with lspdock:
+
+```bash
+# Recommended - explicit separation
+lspdock --container app-web-1 -- --stdio
+
+# Works only if --stdio doesn't conflict
+lspdock --stdio
+```
+
+**Conflicting flags:** If your LSP uses `-c`, `-d`, `-L`, `-e`, `-l`, `-p`, or `--pids`, you must use `--` to pass them to the LSP:
+
+```bash
+# Ambiguous - lspdock captures -l
+lspdock -l debug
+
+# Clear - -l goes to LSP
+lspdock -- -l debug
+```
+
+**Always use `--` when mixing lspdock and LSP arguments** to follow standard Unix conventions (like `docker run`, `cargo run`).
+
 ---
 
 ## Road Map
@@ -202,7 +271,7 @@ tail -f /tmp/lspdock_rust-analyzer.log
 - [x] Redirect URIs between Docker container and Host environment
 - [x] Implement PID monitoring for the IDE
 - [x] Use multiple LSPs in the same project
-- [ ] Use multiple LSPs in different containers
+- [x] Use multiple LSPs in different containers
 
 ---
 

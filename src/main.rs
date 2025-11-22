@@ -8,40 +8,19 @@ mod proxy;
 
 use tokio::io::{BufReader, BufWriter};
 
-use config::ProxyConfig;
+use config::ProxyConfigToml;
 use proxy::forward_proxy;
 
-use crate::config::resolve_config_path;
+use crate::config::{Cli, ProxyConfig, resolve_config_path};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config_path = resolve_config_path()?;
-    let mut config = ProxyConfig::from_file(&config_path).map_err(|e| {
+    let mut cli: Cli = Cli::parse();
+    let config_path = resolve_config_path();
+    let config = ProxyConfigToml::from_file(config_path.as_ref(), &mut cli).map_err(|e| {
         eprintln!("Error retrieving config: {e}");
         e
     })?;
-
-    let args = std::env::args();
-
-    let mut lsp_args: Vec<String> = Vec::new();
-    let mut exec_arg = config.executable.clone();
-    let mut exec_arg_passed = false;
-
-    for (i, extra_arg) in args.skip(1).enumerate() {
-        if i == 0 && extra_arg == "--exec" {
-            exec_arg_passed = true;
-            continue;
-        }
-
-        if i == 1 && exec_arg_passed {
-            exec_arg = extra_arg;
-            // Set the executable if it is passed in the argument
-            config.update_executable(exec_arg.clone());
-            continue;
-        }
-
-        lsp_args.push(extra_arg);
-    }
 
     let temp_path;
 
@@ -62,19 +41,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("Failed to create log file: {}", e))?;
 
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(
-            config
-                .log_level
-                .clone()
-                .unwrap_or_else(|| std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into())),
-        ))
+        .with(tracing_subscriber::EnvFilter::new(config.log_level.clone()))
         .with(tracing_subscriber::fmt::layer().with_writer(file_path))
         .init();
 
-    if exec_arg_passed {
-        debug!("--exec argument received");
-        debug!(exec=%config.executable, "Captured custom executable from argument");
-    }
     debug!(?config, "configuration file");
 
     // Call docker only if the pattern matches.
@@ -85,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--workdir".into(),
             config.docker_internal_path.clone(),
             config.container.clone(),
-            exec_arg,
+            config.executable.clone(),
         ];
         ("docker".into(), cmd)
     } else {
@@ -93,24 +63,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     debug!(%config.container, ?cmd_args, "Connecting to LSP");
-    debug!(?lsp_args, "args received");
-    cmd_args.extend(lsp_args);
+    debug!(?cli.args, "args received");
+    cmd_args.extend(cli.args.clone());
     debug!(?cmd_args, "full command");
 
     info!("Initializing LSP");
 
-    let mut child = Command::new(&cmd)
+    let mut using_docker = config.use_docker;
+    let mut child = match Command::new(&cmd)
         .args(cmd_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .unwrap();
+    {
+        Ok(ch) => ch,
+        Err(_) if config.use_docker => {
+            // Fallback to local lsp
+            let exec = get_fallback_exec(&config);
+            using_docker = false;
+
+            info!("Cannot connect to container, falling back to local");
+
+            // Last try, panic if cannot initialize
+            Command::new(&exec)
+                .args(cli.args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("failed to initialize in Docker and local")
+        }
+
+        Err(err) => {
+            error!(%err, "initializing lsp");
+            std::process::exit(1);
+        }
+    };
 
     let stdout = BufReader::new(child.stdout.take().unwrap());
     let stdin = BufWriter::new(child.stdin.take().unwrap());
 
-    if config.use_docker {
+    if using_docker {
         info!(%config.container, "Attached to stdout/stdin");
     } else {
         info!(%config.executable, "Attached to stdout/stdin");
@@ -122,4 +116,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     Ok(())
+}
+
+#[cfg(unix)]
+fn get_fallback_exec(config: &ProxyConfig) -> String {
+    config.executable.clone()
+}
+
+#[cfg(windows)]
+fn get_fallback_exec(config: &ProxyConfig) -> String {
+    format!("{}.exe", config.executable.clone())
 }

@@ -1,6 +1,6 @@
 use std::process::Stdio;
 use tokio::process::Command;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod config;
 mod lsp;
@@ -47,8 +47,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     debug!(?config, "configuration file");
 
-    // Call docker only if the pattern matches.
-    let (cmd, mut cmd_args) = if config.use_docker {
+    info!("Initializing LSP");
+
+    let mut using_docker = config.use_docker;
+
+    // Check if Docker container exists before trying to use it
+    if using_docker {
+        let container_check = Command::new("docker")
+            .args(["inspect", "-f", "{{.State.Running}}", &config.container])
+            .output();
+
+        match container_check.await {
+            Ok(output) if output.status.success() => {
+                let running = String::from_utf8_lossy(&output.stdout).trim() == "true";
+                if !running {
+                    warn!(container=%config.container, "Container exists but is not running, falling back to local");
+                    using_docker = false;
+                } else {
+                    debug!(container=%config.container, "Container is running");
+                }
+            }
+            Ok(_) => {
+                warn!(container=%config.container, "Container not found, falling back to local");
+                using_docker = false;
+            }
+            Err(e) => {
+                warn!(%e, "Failed to check Docker, falling back to local");
+                using_docker = false;
+            }
+        }
+    }
+
+    let (cmd, cmd_args) = if using_docker {
         let cmd = vec![
             "exec".into(),
             "-i".into(),
@@ -59,47 +89,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ];
         ("docker".into(), cmd)
     } else {
-        (config.executable.clone(), vec![])
+        (get_fallback_exec(&config), vec![])
     };
 
-    debug!(%config.container, ?cmd_args, "Connecting to LSP");
-    debug!(?cli.args, "args received");
-    cmd_args.extend(cli.args.clone());
-    debug!(?cmd_args, "full command");
+    let mut final_args = cmd_args;
+    final_args.extend(cli.args.clone());
 
-    info!("Initializing LSP");
+    debug!(?cmd, ?final_args, "Spawning LSP");
 
-    let mut using_docker = config.use_docker;
-    let mut child = match Command::new(&cmd)
-        .args(cmd_args)
+    let mut child = Command::new(&cmd)
+        .args(&final_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-    {
-        Ok(ch) => ch,
-        Err(_) if config.use_docker => {
-            // Fallback to local lsp
-            let exec = get_fallback_exec(&config);
-            using_docker = false;
-
-            info!("Cannot connect to container, falling back to local");
-
-            // Last try, panic if cannot initialize
-            Command::new(&exec)
-                .args(cli.args)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .spawn()
-                .expect("failed to initialize in Docker and local")
-        }
-
-        Err(err) => {
-            error!(%err, "initializing lsp");
-            std::process::exit(1);
-        }
-    };
+        .expect("failed to spawn LSP process");
 
     let stdout = BufReader::new(child.stdout.take().unwrap());
     let stdin = BufWriter::new(child.stdin.take().unwrap());
@@ -107,7 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if using_docker {
         info!(%config.container, "Attached to stdout/stdin");
     } else {
-        info!(%config.executable, "Attached to stdout/stdin");
+        info!(%config.executable, "Attached to stdout/stdin (local)");
     }
 
     // Main proxy handler

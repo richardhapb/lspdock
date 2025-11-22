@@ -215,10 +215,16 @@ Logs are written to a temporary directory. On Unix systems, this is located at `
 tail -f /tmp/lspdock_rust-analyzer.log
 ```
 
-
 ## CLI Arguments <a id="cli-arguments"></a>
 
 The following arguments can be used. These arguments take precedence over the config file. If an argument is provided, the config file field (if it exists) will be overridden. All arguments passed after `--` will be forwarded to the LSP. If any of these arguments are included, and the LSP arguments are passed directly, e.g. `lspdock --stdio`, all arguments will be sent directly to the LSP.
+
+**Variable Expansion:** CLI arguments support the same variable expansion as the config file (`$CWD`, `$PARENT`, `$HOME`). Use single quotes to prevent shell expansion:
+```bash
+lspdock --container '$PARENT-web' --docker-path /app --local-path '$HOME/dev'
+```
+
+Without single quotes, your shell will expand the variables before lspdock receives them.
 
 ```text
 Usage: lspdock [OPTIONS] [-- <ARGS>...]
@@ -237,6 +243,12 @@ Options:
   -h, --help                       Print help
   -V, --version                    Print version
 ```
+
+**Why single quotes matter:**
+- `"$HOME"` → Shell expands to `/home/user` → lspdock receives `/home/user`
+- `'$HOME'` → Shell doesn't expand → lspdock receives `$HOME` → lspdock expands it
+
+Single quotes preserve the literal `$` so lspdock can do the expansion.
 
 ### When to Use `--`
 

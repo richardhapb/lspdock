@@ -73,7 +73,7 @@ Download the [release](https://github.com/richardhapb/lspdock/releases) for your
 
 ## Configuration
 
-The configuration file is optional, in that case, at least the `container`, `docker_internal_path` and `executable` will be passed as a CLI argument. See [CLI arguments](#cli-arguments) for more details.
+The configuration file is optional, in the case when a config file is not provided, at least the `container`, `docker_internal_path` and `executable` will be passed as a CLI argument. See [CLI arguments](#cli-arguments) for more details.
 
 `LSPDock` uses the following configuration hierarchy: if the top configuration file is present, use that configuration. Use one configuration file at a time. If an option is not present and the next config file contains it, that option will not be used.
 

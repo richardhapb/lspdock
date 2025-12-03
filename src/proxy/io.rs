@@ -142,8 +142,6 @@ where
                                         if !lsp_initialized && find(&msg, br#""method":"initialize""#).is_some() {
                                             lsp_initialized = true;
 
-                                            ensure_root(&mut msg, &config_clone);
-
                                             trace!("Initialize method found");
 
                                             // If it is in initialize method, capture the
@@ -154,6 +152,8 @@ where
                                                 use crate::config::encode_path;
                                                 encode_path(&msg, &mut config_clone);
                                             }
+
+                                            ensure_root(&mut msg, &config_clone);
 
                                             if config_clone.requires_patch_pid() &&
                                             let Some(ref mut pid_handler_ref) = pid_handler {

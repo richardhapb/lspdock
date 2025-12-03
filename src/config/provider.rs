@@ -222,7 +222,7 @@ fn cwd_matches_pattern(cwd: &Path, pattern: Option<&str>) -> bool {
 
 #[allow(dead_code)] // Not used in Unix
 pub fn encode_path(msg: &Bytes, config: &mut ProxyConfig) {
-    config.local_path = if find(msg, b"%3A").is_some() {
+    config.local_path = if find(msg, b"%3A/").is_some() {
         config.local_path.replace(":", "%3A")
     } else {
         config.local_path.clone()

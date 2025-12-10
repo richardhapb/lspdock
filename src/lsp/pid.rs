@@ -31,7 +31,7 @@ impl PidHandler {
             );
             self.pid = process_id.as_u64();
             trace!(self.pid, "captured PID");
-            *process_id = json!("null");
+            *process_id = json!(null);
             *raw_bytes = Bytes::from(serde_json::to_vec(&v)?);
             trace!(?raw_bytes, "patched");
         }

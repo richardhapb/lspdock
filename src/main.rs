@@ -101,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .expect("failed to spawn LSP process");
+        .expect("spawn LSP process");
 
     let stdout = BufReader::new(child.stdout.take().unwrap());
     let stdin = BufWriter::new(child.stdin.take().unwrap());

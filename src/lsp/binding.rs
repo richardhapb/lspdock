@@ -1,7 +1,7 @@
 use crate::{config::ProxyConfig, proxy::Pair};
 use memchr::memmem::{find, find_iter};
 use serde_json::{Value, json};
-use std::{path::PathBuf, process::Stdio, str, sync::Arc};
+use std::{future::Future, path::PathBuf, pin::Pin, process::Stdio, sync::Arc};
 use tokio::{
     fs::{File, create_dir_all},
     io::AsyncWriteExt,
@@ -13,114 +13,110 @@ use tracing::{debug, error, trace};
 use std::collections::HashMap;
 use tokio::sync::RwLock;
 
-/// Redirect the paths from the sender pair to the receiver pair; this is used
-/// for matching the paths between the container and the host path.
+/// Redirect the paths from the sender pair to the receiver pair
 pub fn redirect_uri(
     raw_bytes: &mut Bytes,
     from: &Pair,
     config: &ProxyConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let from_path: &[u8];
-    let to_path: &[u8];
+    let (from_path, to_path): (&[u8], &[u8]) = match from {
+        Pair::Client => (
+            config.local_path.as_bytes(),
+            config.docker_internal_path.as_bytes(),
+        ),
+        Pair::Server => (
+            config.docker_internal_path.as_bytes(),
+            config.local_path.as_bytes(),
+        ),
+    };
 
-    match from {
-        Pair::Client => {
-            from_path = config.local_path.as_bytes();
-            to_path = config.docker_internal_path.as_bytes();
-        }
-        Pair::Server => {
-            from_path = config.docker_internal_path.as_bytes();
-            to_path = config.local_path.as_bytes();
-        }
-    }
+    trace!(from=?String::from_utf8_lossy(from_path), to=?String::from_utf8_lossy(to_path));
 
-    trace!(from=?String::from_utf8(from_path.to_vec()), to=?String::from_utf8(to_path.to_vec()));
-
-    let occurrences = find_iter(raw_bytes, from_path);
-    let from_n = from_path.len();
-    let mut new_bytes: Bytes = Bytes::new();
+    let mut new_bytes = Vec::new();
     let mut last = 0;
 
-    for occurr in occurrences {
-        let before = &raw_bytes[last..occurr];
-        last = occurr + from_n;
-        // add the new text and join
-        new_bytes = Bytes::from([&new_bytes, before, to_path].concat());
+    for pos in find_iter(raw_bytes, from_path) {
+        new_bytes.extend_from_slice(&raw_bytes[last..pos]);
+        new_bytes.extend_from_slice(to_path);
+        last = pos + from_path.len();
     }
-    let after = &raw_bytes[last..];
-    new_bytes = Bytes::from([&new_bytes, after].concat());
+    new_bytes.extend_from_slice(&raw_bytes[last..]);
 
-    *raw_bytes = new_bytes;
-
+    *raw_bytes = Bytes::from(new_bytes);
     Ok(())
 }
 
-// When calling the textDocument/definition method, if the library is external, a different path is used.
-// We need to:
-// 1. Identify if the method is "textDocument/definition", "textDocument/declaration", "textDocument/typeDefinition" (TODO: research if another method is required)
-// 2. Capture the path.
-// 3. Copy the file to a temporary file locally
-// 4. Redirect the URI to the new temporary file.
-// 5. Redirect all other communication requests between the IDE and server to keep LSP working as expected.
-//
-// 6?. Detect when the editor is back in the project to return to normal behavior.
-//
-// Response from server when textDocument/definition is called:
-//
-// IDE to Server: lspdock::lsp::parser: Sending message len=177
-// IDE to Server: lspdock::lsp::parser: {"id":4,"method":"textDocument/definition","jsonrpc":"2.0","params":{"textDocument":{"uri":"file:///usr/src/app/dirtystroke/settings.py"},"position":{"character":13,"line":15}}}
-// Server to IDE: lspdock::lsp::parser: Raw headers headers_str=Content-Length: 190
-// Server to IDE: lspdock::lsp::parser: Processing header line: 'Content-Length: 190'
-// Server to IDE: lspdock::lsp::parser: Header key: 'Content-Length', value: '190'
-// Server to IDE: lspdock::lsp::parser: Reading body content_length=190
-// Server to IDE: lspdock::lsp::parser: body={"jsonrpc":"2.0","id":4,"result":[{"uri":"file:///usr/local/lib/python3.12/site-packages/django/conf/__init__.py","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}}}]}
-//
-// HERE WE NEED TO COPY THE FILE
-//
-// Server to IDE: lspdock::proxy::io: Read message from LSP
-// Server to IDE: lspdock::proxy::io: Incoming message from LSP
-// Server to IDE: lspdock::lsp::parser: Sending message len=190
-//
-// THEN SEND THE MODIFIED PATH TO TEMPORARY FILE
-// Server to IDE: lspdock::lsp::parser: {"jsonrpc":"2.0","id":4,"result":[{"uri":"file:///usr/local/lib/python3.12/site-packages/django/conf/__init__.py","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}}}]}
-//
-// LIKE
-// Server to IDE: lspdock::lsp::parser:
-// {"jsonrpc":"2.0","id":4,"result":[{"uri":"file:///tmp/lspdock/django/conf/__init__.py","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":0}}}]}
-//
-// THE CLIENT INIT AGAIN THE PROXY FOR ANOTHER ENVIRONMENT??
-//
-// lspdock: Connecting to LSP config.container=development-web-1 cmd_args=["exec", "-i", "--workdir", "/usr/src/app", "development-web-1", "pyright-langserver"]
-// lspdock: args received args=Args { inner: ["/Users/richard/proj/lspdock/target/debug/lsproxy", "--stdio"] }
-// lspdock: full command cmd_args=["exec", "-i", "--workdir", "/usr/src/app", "development-web-1", "pyright-lan
+type ActionFn = for<'a> fn(
+    &'a RequestTracker,
+    &'a mut Value,
+) -> Pin<Box<dyn Future<Output = std::io::Result<()>> + Send + 'a>>;
 
-/// Track the definition method related requests for interchanging URIs and handling different requests.
-/// Cloning is cheap, O(1).
-#[derive(Clone)]
+struct MethodHandler {
+    methods: &'static [&'static str],
+    action: ActionFn,
+}
+
+pub struct PluginRegistry {
+    handlers: Vec<MethodHandler>,
+}
+
+impl Default for PluginRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PluginRegistry {
+    pub fn new() -> Self {
+        Self { handlers: vec![] }
+    }
+
+    pub fn register(&mut self, methods: &'static [&'static str], action: ActionFn) {
+        self.handlers.push(MethodHandler { methods, action });
+    }
+
+    async fn process(
+        &self,
+        tracker: &RequestTracker,
+        v: &mut Value,
+        tracked_method: &str,
+    ) -> std::io::Result<()> {
+        for handler in &self.handlers {
+            if handler.methods.contains(&tracked_method) {
+                (handler.action)(tracker, v).await?;
+            }
+        }
+        Ok(())
+    }
+}
+
 pub struct RequestTracker {
     map: Arc<RwLock<HashMap<u64, String>>>,
+    plugins: Arc<PluginRegistry>,
     config: Arc<ProxyConfig>,
 }
 
+impl Clone for RequestTracker {
+    fn clone(&self) -> Self {
+        Self {
+            map: self.map.clone(),
+            plugins: self.plugins.clone(),
+            config: self.config.clone(),
+        }
+    }
+}
+
 impl RequestTracker {
-    pub fn new(config: ProxyConfig) -> Self {
+    pub fn new(config: ProxyConfig, plugins: PluginRegistry) -> Self {
         Self {
             map: Arc::new(RwLock::new(HashMap::new())),
+            plugins: Arc::new(plugins),
             config: Arc::new(config),
         }
     }
 
     async fn track(&self, id: u64, method: &str) {
         self.map.write().await.insert(id, method.to_string());
-    }
-
-    async fn take_if_match(&self, id: u64) -> bool {
-        let mut map = self.map.write().await;
-        if map.get(&id).is_some() {
-            map.remove(&id);
-            return true;
-        }
-        false
     }
 
     pub async fn check_for_methods(
@@ -136,9 +132,8 @@ impl RequestTracker {
 
         match pair {
             Pair::Server => {
-                // Early return
                 if self.map.read().await.is_empty() {
-                    trace!("Nothing expecting response, skipping method");
+                    trace!("Nothing expecting response, skipping");
                     return Ok(());
                 }
 
@@ -147,28 +142,9 @@ impl RequestTracker {
 
                 // Check if this is a response to a tracked request
                 if let Some(id) = v.get("id").and_then(Value::as_u64) {
-                    let matches = self.take_if_match(id).await;
-                    debug!(%matches);
-                    if matches {
-                        trace!(%id, "matches");
-                        if let Some(results) = v.get_mut("result").and_then(Value::as_array_mut) {
-                            trace!(?results);
-                            for result in results {
-                                if let Some(uri_val) = result.get("uri").and_then(|u| u.as_str())
-                                    && !(uri_val.contains(&self.config.local_path))
-                                {
-                                    debug!(%uri_val);
-                                    let new_uri = self.bind_library(uri_val).await?;
-                                    debug!("file://{}", new_uri);
-
-                                    Self::modify_uri(result, &new_uri);
-                                }
-                            }
-
-                            *raw_bytes = Bytes::from(serde_json::to_vec(&v)?);
-                        } else {
-                            trace!("result content not found");
-                        }
+                    if let Some(tracked_method) = self.map.write().await.remove(&id) {
+                        self.plugins.process(self, &mut v, &tracked_method).await?;
+                        *raw_bytes = Bytes::from(serde_json::to_vec(&v)?);
                     }
                 }
             }
@@ -186,7 +162,6 @@ impl RequestTracker {
                 }
 
                 if method_found.is_empty() {
-                    debug!("Any method that required redirection was not found, skipping patch");
                     return Ok(());
                 }
 
@@ -197,8 +172,6 @@ impl RequestTracker {
 
                 debug!("Checking for id");
                 if let Some(id) = v.get("id").and_then(Value::as_u64) {
-                    debug!(%id);
-                    // Only track expected methods if URI matches
                     self.track(id, method_found).await;
                     debug!(%id, "Storing");
                 }
@@ -223,8 +196,7 @@ impl RequestTracker {
         } else {
             let relative_path = safe_path.strip_prefix("/").unwrap_or(&safe_path);
             trace!(%relative_path);
-            let tmp_file_path = relative_path;
-            temp_dir.join(tmp_file_path)
+            temp_dir.join(relative_path)
         };
 
         // Create the directories if they do not exist
@@ -236,9 +208,7 @@ impl RequestTracker {
         let temp_uri = temp_uri.to_string_lossy().to_string();
         trace!(%temp_uri);
 
-        let temp_uri_path = PathBuf::from(&temp_uri);
-        debug!(%temp_uri);
-        if !temp_uri_path.exists() {
+        if !PathBuf::from(&temp_uri).exists() {
             self.copy_file(&safe_path, &temp_uri).await?;
         } else {
             debug!("File already exists, skipping copy. {}", temp_uri);
@@ -247,32 +217,29 @@ impl RequestTracker {
         Ok(temp_uri)
     }
 
-    /// Copies a file from either the local filesystem or a Docker container.
     async fn copy_file(&self, path: &str, destination: &str) -> std::io::Result<()> {
         // Only copy the file if the LSP is in a container
         debug!("Starting file copy from {} to {}", path, destination);
-        let cmd = Command::new("docker")
+        let output = Command::new("docker")
             .args(["exec", &self.config.container, "cat", path])
             .stdout(Stdio::piped())
             .stdin(Stdio::null())
             .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn docker command");
+            .output()
+            .await?;
 
-        let status = cmd.wait_with_output().await?;
-
-        if !status.status.success() {
-            let stderr = String::from_utf8_lossy(&status.stderr);
-            error!("Command failed with status {}: {}", status.status, stderr);
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            error!("Command failed with status {}: {}", output.status, stderr);
             return Err(std::io::Error::other(format!("command failed: {}", stderr)));
         }
 
         let mut file = File::create(destination).await?;
-        file.write_all(&status.stdout).await?;
+        file.write_all(&output.stdout).await?;
 
         debug!(
             "Successfully wrote {} bytes to {}",
-            status.stdout.len(),
+            output.stdout.len(),
             destination
         );
         Ok(())
@@ -281,58 +248,118 @@ impl RequestTracker {
     fn modify_uri(result: &mut Value, new_uri: &str) {
         if let Some(uri) = result.get_mut("uri") {
             *uri = json!(format!("file://{}", new_uri));
-        };
+        }
     }
+}
+
+// Plugin actions - return pinned futures with proper lifetime
+pub fn redirect_goto_methods<'a>(
+    tracker: &'a RequestTracker,
+    v: &'a mut Value,
+) -> Pin<Box<dyn Future<Output = std::io::Result<()>> + Send + 'a>> {
+    Box::pin(async move {
+        if let Some(results) = v.get_mut("result").and_then(Value::as_array_mut) {
+            for result in results {
+                if let Some(uri_val) = result.get("uri").and_then(|u| u.as_str()) {
+                    if !uri_val.contains(&tracker.config.local_path) {
+                        let new_uri = tracker.bind_library(uri_val).await?;
+                        RequestTracker::modify_uri(result, &new_uri);
+                    }
+                }
+            }
+        }
+        Ok(())
+    })
+}
+
+pub fn test_hover<'a>(
+    _tracker: &'a RequestTracker,
+    v: &'a mut Value,
+) -> Pin<Box<dyn Future<Output = std::io::Result<()>> + Send + 'a>> {
+    Box::pin(async move {
+        if let Some(result) = v.get_mut("result").filter(|r| !r.is_null()) {
+            if let Some(value) = result.get_mut("contents").and_then(|c| c.get_mut("value")) {
+                if let Some(s) = value.as_str() {
+                    *value = Value::String(s.replace("a", "e"));
+                }
+            }
+        }
+        Ok(())
+    })
 }
 
 pub fn ensure_root(msg: &mut Bytes, config: &ProxyConfig) {
     let docker_uri = format!("file://{}", config.docker_internal_path);
 
-    // Patch rootUri
-    let key = b"\"rootUri\":\"";
-    if let Some(mut beg) = find(msg, key) {
-        beg += key.len();
-        if let Some(mut end) = find(&msg[beg..], b"\"") {
-            end += beg; // Make it absolute position
-            let before = &msg[..beg];
-            let after = &msg[end..];
-            *msg = Bytes::from([before, docker_uri.as_bytes(), after].concat());
-        }
-    }
-
-    // Patch rootPath if present
-    let key = b"\"rootPath\":\"";
-    if let Some(mut beg) = find(msg, key) {
-        beg += key.len();
-        if let Some(mut end) = find(&msg[beg..], b"\"") {
-            end += beg;
-            let before = &msg[..beg];
-            let after = &msg[end..];
-            *msg = Bytes::from([before, docker_uri.as_bytes(), after].concat());
+    for key in [b"\"rootUri\":\"".as_slice(), b"\"rootPath\":\""] {
+        if let Some(beg) = find(msg, key).map(|p| p + key.len()) {
+            if let Some(end) = find(&msg[beg..], b"\"").map(|p| p + beg) {
+                let before = &msg[..beg];
+                let after = &msg[end..];
+                *msg = Bytes::from([before, docker_uri.as_bytes(), after].concat());
+            }
         }
     }
 
     let key = b"\"workspaceFolders\":[";
-    if let Some(mut beg) = find(msg, key) {
-        beg += key.len();
-        if let Some(mut end) = find(&msg[beg..], b"]") {
-            end += beg;
-            let before = &msg[..beg];
-            let after = &msg[end..];
+    if let Some(beg) = find(msg, key).map(|p| p + key.len()) {
+        if let Some(end) = find(&msg[beg..], b"]").map(|p| p + beg) {
             if let Some(ws) = patch_workspace_folders(&msg[beg..end], &docker_uri) {
+                let before = &msg[..beg];
+                let after = &msg[end..];
                 *msg = Bytes::from([before, &ws, after].concat());
             }
         }
     }
 }
 
+// pub fn ensure_root(msg: &mut Bytes, config: &ProxyConfig) {
+//     let docker_uri = format!("file://{}", config.docker_internal_path);
+//
+//     // Patch rootUri
+//     let key = b"\"rootUri\":\"";
+//     if let Some(mut beg) = find(msg, key) {
+//         beg += key.len();
+//         if let Some(mut end) = find(&msg[beg..], b"\"") {
+//             end += beg; // Make it absolute position
+//             let before = &msg[..beg];
+//             let after = &msg[end..];
+//             *msg = Bytes::from([before, docker_uri.as_bytes(), after].concat());
+//         }
+//     }
+//
+//     // Patch rootPath if present
+//     let key = b"\"rootPath\":\"";
+//     if let Some(mut beg) = find(msg, key) {
+//         beg += key.len();
+//         if let Some(mut end) = find(&msg[beg..], b"\"") {
+//             end += beg;
+//             let before = &msg[..beg];
+//             let after = &msg[end..];
+//             *msg = Bytes::from([before, docker_uri.as_bytes(), after].concat());
+//         }
+//     }
+//
+//     let key = b"\"workspaceFolders\":[";
+//     if let Some(mut beg) = find(msg, key) {
+//         beg += key.len();
+//         if let Some(mut end) = find(&msg[beg..], b"]") {
+//             end += beg;
+//             let before = &msg[..beg];
+//             let after = &msg[end..];
+//             if let Some(ws) = patch_workspace_folders(&msg[beg..end], &docker_uri) {
+//                 *msg = Bytes::from([before, &ws, after].concat());
+//             }
+//         }
+//     }
+// }
+
 fn patch_workspace_folders(msg: &[u8], docker_uri: &str) -> Option<Bytes> {
     let key = b"\"uri\":\"";
     let mut result = None;
     for uri_beg in find_iter(msg, key) {
         let beg = uri_beg + key.len();
-        if let Some(mut end) = find(&msg[beg..], b"\"") {
-            end += beg;
+        if let Some(end) = find(&msg[beg..], b"\"").map(|p| p + beg) {
             let before = &msg[..beg];
             let after = &msg[end..];
             result = Some(Bytes::from([before, docker_uri.as_bytes(), after].concat()));

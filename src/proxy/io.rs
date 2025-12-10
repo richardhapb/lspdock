@@ -3,7 +3,10 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use crate::lsp::{
-    binding::{RequestTracker, ensure_root, redirect_uri},
+    binding::{
+        PluginRegistry, RequestTracker, ensure_root, redirect_goto_methods, redirect_uri,
+        test_hover,
+    },
     parser::{LspFramedReader, send_message},
     pid::PidHandler,
 };
@@ -12,6 +15,12 @@ use tracing::{Instrument, Level, debug, error, info, span, trace};
 
 use crate::config::ProxyConfig;
 
+const ALL_METHODS: &[&str] = &[
+    "textDocument/hover",
+    "textDocument/definition",
+    "textDocument/declaration",
+    "textDocument/typeDefinition",
+];
 const GOTO_METHODS: &[&str] = &[
     "textDocument/definition",
     "textDocument/declaration",
@@ -48,7 +57,11 @@ where
         Ok(())
     });
 
-    let tracker = RequestTracker::new(config.clone());
+    // Before creating tracker
+    let mut plugins = PluginRegistry::new();
+    plugins.register(&["textDocument/hover"], test_hover);
+    plugins.register(GOTO_METHODS, redirect_goto_methods);
+    let tracker = RequestTracker::new(config.clone(), plugins);
 
     // The client writes to proxy stdin and proxy writes to LSP stdin
     let ide_to_server = main_loop(Pair::Client, &mut config, stdin, lsp_stdin, tracker.clone());
@@ -163,9 +176,9 @@ where
                                         }
                                     }
 
-                                    redirect_uri(&mut msg, &pair, &config_clone)?;
-                                    tracker_inner.check_for_methods(GOTO_METHODS, &mut msg, &pair).await?;
-                                }
+                                tracker_inner.check_for_methods(ALL_METHODS, &mut msg, &pair).await?;
+                                redirect_uri(&mut msg, &pair, &config_clone)?;
+                            }
 
                                 send_message(&mut writer, &msg).await.map_err(|e| {
                                     error!("Failed to forward the request: {}", e);

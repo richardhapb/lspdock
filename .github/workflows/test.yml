@@ -38,7 +38,7 @@ jobs:
 
           # macOS
           - os_name: macOS-x86_64
-            os: macos-13 # Intel
+            os: macos-15 # Intel
             target: x86_64-apple-darwin
 
           - os_name: macOS-aarch64

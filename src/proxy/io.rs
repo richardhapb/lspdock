@@ -117,75 +117,72 @@ where
                 Pair::Client => Some(PidHandler::new()),
             };
             loop {
-                tokio::select! {
-                    messages = reader.read_messages() => {
-                        debug!("Messages has been read");
-                        match messages {
-                            Ok(Some(msgs)) => {
-                                trace!(msgs_len=msgs.len());
-                                trace!(?msgs);
+                let messages = reader.read_messages().await;
+                    debug!("Messages has been read");
+                    match messages {
+                        Ok(Some(msgs)) => {
+                            trace!(msgs_len=msgs.len());
+                            trace!(?msgs);
 
-                                // If the messages are empty, increase the counter
-                                empty_counter = if msgs.is_empty() {
-                                    empty_counter + 1
-                                } else {
-                                    0
-                                };
+                            // If the messages are empty, increase the counter
+                            empty_counter = if msgs.is_empty() {
+                                empty_counter + 1
+                            } else {
+                                0
+                            };
 
-                                if empty_counter >= MAX_EMPTY_RESPONSES_THRESHOLD {
-                                    info!("The empty response has reached the threshold; closing LSP connection");
-                                    break;
-                                }
-
-                                for mut msg in msgs {
-                                    if config_clone.use_docker {
-                                        if !lsp_initialized && find(&msg, br#""method":"initialize""#).is_some() {
-                                            lsp_initialized = true;
-
-                                            trace!("Initialize method found");
-
-                                            // If it is in initialize method, capture the
-                                            // colon encoding in Windows
-                                            #[cfg(windows)]
-                                            {
-                                                debug!("Capturing colon config in windows");
-                                                use crate::config::encode_path;
-                                                encode_path(&msg, &mut config_clone);
-                                            }
-
-                                            ensure_root(&mut msg, &config_clone);
-
-                                            if config_clone.requires_patch_pid() &&
-                                            let Some(ref mut pid_handler_ref) = pid_handler {
-                                                trace!("Trying to take the PID from the initialize method");
-
-                                                // The function returns true if the take succeeds
-                                                pid_handler_ref.try_take_initialize_process_id(&mut msg)?;
-                                            }
-                                        }
-
-                                        redirect_uri(&mut msg, &pair, &config_clone)?;
-                                        tracker_inner.check_for_methods(GOTO_METHODS, &mut msg, &pair).await?;
-                                    }
-
-                                    send_message(&mut writer, &msg).await.map_err(|e| {
-                                        error!("Failed to forward the request: {}", e);
-                                        e
-                                    })?;
-                                }
-                            }
-                            Ok(None) => {
-                                tokio::time::sleep(Duration::from_millis(30)).await;
-                                debug!("Empty request, connection closed");
+                            if empty_counter >= MAX_EMPTY_RESPONSES_THRESHOLD {
+                                info!("The empty response has reached the threshold; closing LSP connection");
                                 break;
                             }
-                            Err(e) => {
-                                tokio::time::sleep(Duration::from_millis(10)).await;
-                                error!("Error reading message: {}", e);
-                                return Err(e);
+
+                            for mut msg in msgs {
+                                if config_clone.use_docker {
+                                    if !lsp_initialized && find(&msg, br#""method":"initialize""#).is_some() {
+                                        lsp_initialized = true;
+
+                                        trace!("Initialize method found");
+
+                                        // If it is in initialize method, capture the
+                                        // colon encoding in Windows
+                                        #[cfg(windows)]
+                                        {
+                                            debug!("Capturing colon config in windows");
+                                            use crate::config::encode_path;
+                                            encode_path(&msg, &mut config_clone);
+                                        }
+
+                                        ensure_root(&mut msg, &config_clone);
+
+                                        if config_clone.requires_patch_pid() &&
+                                        let Some(ref mut pid_handler_ref) = pid_handler {
+                                            trace!("Trying to take the PID from the initialize method");
+
+                                            // The function returns true if the take succeeds
+                                            pid_handler_ref.try_take_initialize_process_id(&mut msg)?;
+                                        }
+                                    }
+
+                                    redirect_uri(&mut msg, &pair, &config_clone)?;
+                                    tracker_inner.check_for_methods(GOTO_METHODS, &mut msg, &pair).await?;
+                                }
+
+                                send_message(&mut writer, &msg).await.map_err(|e| {
+                                    error!("Failed to forward the request: {}", e);
+                                    e
+                                })?;
                             }
                         }
-                    }
+                        Ok(None) => {
+                            tokio::time::sleep(Duration::from_millis(30)).await;
+                            debug!("Empty request, connection closed");
+                            break;
+                        }
+                        Err(e) => {
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                            error!("Error reading message: {}", e);
+                            return Err(e);
+                        }
                 }
             }
             Ok(())

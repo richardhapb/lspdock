@@ -152,11 +152,16 @@ pub mod lsp_utils {
     macro_rules! lspmsg {
     ($($key:literal: $value:expr),+ $(,)?) => {{
         // Build JSON params object
-        let params = format!(
+        let mut params = format!(
             r#"{{{}}}"#,
             vec![$(format!(r#""{}":"{}""#, $key, $value)),+]
                 .join(",")
         );
+
+        // Simple approach to handle list in this macro, probably not the most
+        // resilient option but works for the current tests
+        params = params.replace("\"[", "[");
+        params = params.replace("]\"", "]");
 
         let body = format!(
             r#"{{"jsonrpc":"2.0","method":"window/logMessage","params":{}}}"#,

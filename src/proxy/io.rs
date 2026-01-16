@@ -3,10 +3,7 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use crate::lsp::{
-    binding::{
-        PluginRegistry, RequestTracker, ensure_root, redirect_goto_methods, redirect_uri,
-        test_hover,
-    },
+    binding::{PluginRegistry, RequestTracker, ensure_root, redirect_goto_methods, redirect_uri},
     parser::{LspFramedReader, send_message},
     pid::PidHandler,
 };
@@ -59,7 +56,6 @@ where
 
     // Before creating tracker
     let mut plugins = PluginRegistry::new();
-    plugins.register(&["textDocument/hover"], test_hover);
     plugins.register(GOTO_METHODS, redirect_goto_methods);
     let tracker = RequestTracker::new(config.clone(), plugins);
 
@@ -176,26 +172,26 @@ where
                                         }
                                     }
 
-                                tracker_inner.check_for_methods(ALL_METHODS, &mut msg, &pair).await?;
                                 redirect_uri(&mut msg, &pair, &config_clone)?;
                             }
+                            tracker_inner.check_for_methods(ALL_METHODS, &mut msg, &pair).await?;
 
-                                send_message(&mut writer, &msg).await.map_err(|e| {
-                                    error!("Failed to forward the request: {}", e);
-                                    e
-                                })?;
-                            }
+                            send_message(&mut writer, &msg).await.map_err(|e| {
+                                error!("Failed to forward the request: {}", e);
+                                e
+                            })?;
                         }
-                        Ok(None) => {
-                            tokio::time::sleep(Duration::from_millis(30)).await;
-                            debug!("Empty request, connection closed");
-                            break;
-                        }
-                        Err(e) => {
-                            tokio::time::sleep(Duration::from_millis(10)).await;
-                            error!("Error reading message: {}", e);
-                            return Err(e);
-                        }
+                    }
+                    Ok(None) => {
+                        tokio::time::sleep(Duration::from_millis(30)).await;
+                        debug!("Empty request, connection closed");
+                        break;
+                    }
+                    Err(e) => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        error!("Error reading message: {}", e);
+                        return Err(e);
+                    }
                 }
             }
             Ok(())

@@ -125,11 +125,6 @@ impl RequestTracker {
         raw_bytes: &mut Bytes,
         pair: &Pair,
     ) -> std::io::Result<()> {
-        // If the LSP is not in a container, there is no need to track this.
-        if !self.config.use_docker {
-            return Ok(());
-        }
-
         match pair {
             Pair::Server => {
                 if self.map.read().await.is_empty() {
@@ -141,11 +136,11 @@ impl RequestTracker {
                 trace!(server_response=%v, "received");
 
                 // Check if this is a response to a tracked request
-                if let Some(id) = v.get("id").and_then(Value::as_u64) {
-                    if let Some(tracked_method) = self.map.write().await.remove(&id) {
-                        self.plugins.process(self, &mut v, &tracked_method).await?;
-                        *raw_bytes = Bytes::from(serde_json::to_vec(&v)?);
-                    }
+                if let Some(id) = v.get("id").and_then(Value::as_u64)
+                    && let Some(tracked_method) = self.map.write().await.remove(&id)
+                {
+                    self.plugins.process(self, &mut v, &tracked_method).await?;
+                    *raw_bytes = Bytes::from(serde_json::to_vec(&v)?);
                 }
             }
 
@@ -258,13 +253,17 @@ pub fn redirect_goto_methods<'a>(
     v: &'a mut Value,
 ) -> Pin<Box<dyn Future<Output = std::io::Result<()>> + Send + 'a>> {
     Box::pin(async move {
+        // If the LSP is not in a container, there is no need to track this.
+        if !tracker.config.use_docker {
+            return Ok(());
+        }
         if let Some(results) = v.get_mut("result").and_then(Value::as_array_mut) {
             for result in results {
-                if let Some(uri_val) = result.get("uri").and_then(|u| u.as_str()) {
-                    if !uri_val.contains(&tracker.config.local_path) {
-                        let new_uri = tracker.bind_library(uri_val).await?;
-                        RequestTracker::modify_uri(result, &new_uri);
-                    }
+                if let Some(uri_val) = result.get("uri").and_then(|u| u.as_str())
+                    && !uri_val.contains(&tracker.config.local_path)
+                {
+                    let new_uri = tracker.bind_library(uri_val).await?;
+                    RequestTracker::modify_uri(result, &new_uri);
                 }
             }
         }
@@ -272,87 +271,46 @@ pub fn redirect_goto_methods<'a>(
     })
 }
 
-pub fn test_hover<'a>(
-    _tracker: &'a RequestTracker,
-    v: &'a mut Value,
-) -> Pin<Box<dyn Future<Output = std::io::Result<()>> + Send + 'a>> {
-    Box::pin(async move {
-        if let Some(result) = v.get_mut("result").filter(|r| !r.is_null()) {
-            if let Some(value) = result.get_mut("contents").and_then(|c| c.get_mut("value")) {
-                if let Some(s) = value.as_str() {
-                    *value = Value::String(s.replace("a", "e"));
-                }
-            }
-        }
-        Ok(())
-    })
-}
-
+/// Override any root resolver to the docker internal path,
+/// this ensure that the LSP can consume it correctly independent
+/// of the IDE
 pub fn ensure_root(msg: &mut Bytes, config: &ProxyConfig) {
     let docker_uri = format!("file://{}", config.docker_internal_path);
 
-    for key in [b"\"rootUri\":\"".as_slice(), b"\"rootPath\":\""] {
-        if let Some(beg) = find(msg, key).map(|p| p + key.len()) {
-            if let Some(end) = find(&msg[beg..], b"\"").map(|p| p + beg) {
-                let before = &msg[..beg];
-                let after = &msg[end..];
-                *msg = Bytes::from([before, docker_uri.as_bytes(), after].concat());
-            }
-        }
+    // rootPath is deprecated since 3.0 in favour of rootUri
+    // but we want to support it anyway, notice that this
+    // use the path not as a uri (misses the `file://` prefix)
+    let key = b"\"rootPath\":\"".as_slice();
+    if let Some(beg) = find(msg, key).map(|p| p + key.len())
+        && let Some(end) = find(&msg[beg..], b"\"").map(|p| p + beg)
+    {
+        let before = &msg[..beg];
+        let after = &msg[end..];
+        *msg = Bytes::from([before, config.docker_internal_path.as_bytes(), after].concat());
     }
 
+    // rootUri is deprecated since 3.6 in favour of workspaceFolders
+    // but we want to support it anyway
+    let key = b"\"rootUri\":\"".as_slice();
+    if let Some(beg) = find(msg, key).map(|p| p + key.len())
+        && let Some(end) = find(&msg[beg..], b"\"").map(|p| p + beg)
+    {
+        let before = &msg[..beg];
+        let after = &msg[end..];
+        *msg = Bytes::from([before, docker_uri.as_bytes(), after].concat());
+    }
+
+    // Active root resolver, if it is present, then will override `rootPath` and `rootUri`
     let key = b"\"workspaceFolders\":[";
-    if let Some(beg) = find(msg, key).map(|p| p + key.len()) {
-        if let Some(end) = find(&msg[beg..], b"]").map(|p| p + beg) {
-            if let Some(ws) = patch_workspace_folders(&msg[beg..end], &docker_uri) {
-                let before = &msg[..beg];
-                let after = &msg[end..];
-                *msg = Bytes::from([before, &ws, after].concat());
-            }
-        }
+    if let Some(beg) = find(msg, key).map(|p| p + key.len())
+        && let Some(end) = find(&msg[beg..], b"]").map(|p| p + beg)
+        && let Some(ws) = patch_workspace_folders(&msg[beg..end], &docker_uri)
+    {
+        let before = &msg[..beg];
+        let after = &msg[end..];
+        *msg = Bytes::from([before, &ws, after].concat());
     }
 }
-
-// pub fn ensure_root(msg: &mut Bytes, config: &ProxyConfig) {
-//     let docker_uri = format!("file://{}", config.docker_internal_path);
-//
-//     // Patch rootUri
-//     let key = b"\"rootUri\":\"";
-//     if let Some(mut beg) = find(msg, key) {
-//         beg += key.len();
-//         if let Some(mut end) = find(&msg[beg..], b"\"") {
-//             end += beg; // Make it absolute position
-//             let before = &msg[..beg];
-//             let after = &msg[end..];
-//             *msg = Bytes::from([before, docker_uri.as_bytes(), after].concat());
-//         }
-//     }
-//
-//     // Patch rootPath if present
-//     let key = b"\"rootPath\":\"";
-//     if let Some(mut beg) = find(msg, key) {
-//         beg += key.len();
-//         if let Some(mut end) = find(&msg[beg..], b"\"") {
-//             end += beg;
-//             let before = &msg[..beg];
-//             let after = &msg[end..];
-//             *msg = Bytes::from([before, docker_uri.as_bytes(), after].concat());
-//         }
-//     }
-//
-//     let key = b"\"workspaceFolders\":[";
-//     if let Some(mut beg) = find(msg, key) {
-//         beg += key.len();
-//         if let Some(mut end) = find(&msg[beg..], b"]") {
-//             end += beg;
-//             let before = &msg[..beg];
-//             let after = &msg[end..];
-//             if let Some(ws) = patch_workspace_folders(&msg[beg..end], &docker_uri) {
-//                 *msg = Bytes::from([before, &ws, after].concat());
-//             }
-//         }
-//     }
-// }
 
 fn patch_workspace_folders(msg: &[u8], docker_uri: &str) -> Option<Bytes> {
     let key = b"\"uri\":\"";
@@ -404,8 +362,8 @@ mod tests {
 
         // From Client to Server
 
-        let rq = lspmsg!("uri": "/test/path", "method": "text/document", "workspaceFolder": "/test/path");
-        let ex = lspmsg!("uri": "/usr/home/app", "method": "text/document", "workspaceFolder": "/usr/home/app");
+        let rq = lspmsg!("uri": "/test/path", "method": "text/document", "workspaceFolders": "[\"name\": \"something\", \"uri\": \"/test/path\"]");
+        let ex = lspmsg!("uri": "/usr/home/app", "method": "text/document", "workspaceFolders": "[\"name\": \"something\", \"uri\": \"/usr/home/app\"]");
 
         let mut request = Bytes::from(rq.clone());
         let mut expected = Bytes::from(ex);
@@ -436,7 +394,8 @@ mod tests {
         let msg = lspmsg!(
             "method": "initialize",
             "rootUri": "file:///test/path",
-            "rootPath": "/test/path"
+            "rootPath": "/test/path",
+            "workspaceFolders": "[\"uri\":\"/test/path\",\"name\":\"something\"]"
         );
 
         let mut request = Bytes::from(msg);
@@ -444,7 +403,14 @@ mod tests {
 
         let body = lspbody!(&request => "string");
         assert!(find(body, b"\"rootUri\":\"file:///usr/home/app\"").is_some());
-        assert!(find(body, b"\"rootPath\":\"file:///usr/home/app\"").is_some());
+        assert!(find(body, b"\"rootPath\":\"/usr/home/app\"").is_some());
+        assert!(
+            find(
+                body,
+                b"\"workspaceFolders\":[\"uri\":\"file:///usr/home/app\",\"name\":\"something\"]"
+            )
+            .is_some()
+        );
     }
 }
 

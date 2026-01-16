@@ -12,12 +12,6 @@ use tracing::{Instrument, Level, debug, error, info, span, trace};
 
 use crate::config::ProxyConfig;
 
-const ALL_METHODS: &[&str] = &[
-    "textDocument/hover",
-    "textDocument/definition",
-    "textDocument/declaration",
-    "textDocument/typeDefinition",
-];
 const GOTO_METHODS: &[&str] = &[
     "textDocument/definition",
     "textDocument/declaration",
@@ -174,7 +168,7 @@ where
 
                                 redirect_uri(&mut msg, &pair, &config_clone)?;
                             }
-                            tracker_inner.check_for_methods(ALL_METHODS, &mut msg, &pair).await?;
+                            tracker_inner.check_for_methods(GOTO_METHODS, &mut msg, &pair).await?;
 
                             send_message(&mut writer, &msg).await.map_err(|e| {
                                 error!("Failed to forward the request: {}", e);

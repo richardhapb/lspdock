@@ -304,7 +304,7 @@ pub fn ensure_root(msg: &mut Bytes, config: &ProxyConfig) {
     let key = b"\"workspaceFolders\":[";
     if let Some(beg) = find(msg, key).map(|p| p + key.len())
         && let Some(end) = find(&msg[beg..], b"]").map(|p| p + beg)
-        && let Some(ws) = patch_workspace_folders(&msg[beg..end], &docker_uri)
+        && let Some(ws) = patch_workspace_folders(&msg[beg..end], &docker_uri, &config.local_path)
     {
         let before = &msg[..beg];
         let after = &msg[end..];
@@ -312,19 +312,48 @@ pub fn ensure_root(msg: &mut Bytes, config: &ProxyConfig) {
     }
 }
 
-fn patch_workspace_folders(msg: &[u8], docker_uri: &str) -> Option<Bytes> {
+fn patch_workspace_folders(msg: &[u8], docker_uri: &str, local_path: &str) -> Option<Bytes> {
     let key = b"\"uri\":\"";
-    let mut result = None;
-    for uri_beg in find_iter(msg, key) {
+
+    // Check if we have any matches before allocating
+    let mut matches = find_iter(msg, key).peekable();
+    matches.peek()?;
+
+    let local_path_uri = format!("file://{local_path}");
+
+    let mut new_bytes = Vec::new();
+    // Cursor to track the position of replacements
+    let mut last_pos = 0;
+
+    // Iterate and accumulate
+    for uri_beg in matches {
         let beg = uri_beg + key.len();
         if let Some(end) = find(&msg[beg..], b"\"").map(|p| p + beg) {
-            let before = &msg[..beg];
-            let after = &msg[end..];
-            result = Some(Bytes::from([before, docker_uri.as_bytes(), after].concat()));
+            // Append everything from the last position up to the start of the URI value
+            new_bytes.extend_from_slice(&msg[last_pos..beg]);
+
+            // Force the path to the directory, this occurres in VSCode when in some
+            // cases the workspaceFolders is set to a relative dir like `file://app`
+            new_bytes.extend_from_slice(docker_uri.as_bytes());
+
+            // First try to change the root dir if it is match with the local dir
+            if let Some(pattern_init) =
+                find(&msg[beg..end], local_path_uri.as_bytes()).map(|p| p + beg)
+            {
+                let pattern_end = pattern_init + local_path_uri.len();
+                // Fill the gap, when local path is `/my/local/path` and root is `/my/local/path/subdir`
+                // we add here `/subdir`
+                new_bytes.extend_from_slice(&msg[pattern_end..end]);
+            }
+
+            last_pos = end;
         }
     }
 
-    result
+    // Append the remainder of the message
+    new_bytes.extend_from_slice(&msg[last_pos..]);
+
+    Some(Bytes::from(new_bytes))
 }
 
 #[cfg(test)]
@@ -362,8 +391,8 @@ mod tests {
 
         // From Client to Server
 
-        let rq = lspmsg!("uri": "/test/path", "method": "text/document", "workspaceFolders": "[\"name\": \"something\", \"uri\": \"/test/path\"]");
-        let ex = lspmsg!("uri": "/usr/home/app", "method": "text/document", "workspaceFolders": "[\"name\": \"something\", \"uri\": \"/usr/home/app\"]");
+        let rq = lspmsg!("uri": "/test/path", "method": "text/document", "workspaceFolders": "[\"name\":\"something\", \"uri\":\"file:///test/path\"]");
+        let ex = lspmsg!("uri": "/usr/home/app", "method": "text/document", "workspaceFolders": "[\"name\":\"something\", \"uri\":\"file:///usr/home/app\"]");
 
         let mut request = Bytes::from(rq.clone());
         let mut expected = Bytes::from(ex);
@@ -410,6 +439,116 @@ mod tests {
                 b"\"workspaceFolders\":[\"uri\":\"file:///usr/home/app\",\"name\":\"something\"]"
             )
             .is_some()
+        );
+    }
+
+    #[test]
+    fn ensure_root_patches_multiple_workspace_folders() {
+        let mut config = construct_config();
+        config.docker_internal_path = "/usr/src/app".to_string();
+
+        // We simulate a client sending TWO workspace folders
+        let input_json = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "workspaceFolders": [
+                    { "uri": "file:///local/path/one", "name": "one" },
+                    { "uri": "file:///local/path/two", "name": "two" }
+                ]
+            }
+        });
+
+        let mut request = Bytes::from(serde_json::to_vec(&input_json).unwrap());
+
+        // Run the patcher
+        ensure_root(&mut request, &config);
+
+        let body = String::from_utf8(request.to_vec()).unwrap();
+
+        // EXPECTATION:
+        // Both URIs should be replaced by the docker internal path.
+        let expected_uri = "file:///usr/src/app";
+
+        // Check that the first original URI is GONE
+        assert!(
+            !body.contains("file:///local/path/one"),
+            "The first workspace folder was NOT patched (or was reverted)!"
+        );
+
+        // Check that the second original URI is GONE
+        assert!(
+            !body.contains("file:///local/path/two"),
+            "The second workspace folder was NOT patched!"
+        );
+
+        // Check that the target URI appears twice
+        let matches = body.matches(expected_uri).count();
+        assert_eq!(
+            matches, 2,
+            "Expected the docker URI to appear twice, found it {} times",
+            matches
+        );
+    }
+
+    #[test]
+    fn ensure_root_patches_with_subdirs() {
+        let mut config = construct_config();
+        config.local_path = "/local/path".to_string(); // <- this is the root path
+        config.docker_internal_path = "/usr/src/app".to_string();
+
+        // We simulate a client sending TWO workspace folders
+        let input_json = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "workspaceFolders": [
+                    { "uri": "file:///local/path/one", "name": "one" },
+                    { "uri": "file:///local/path/two", "name": "two" }
+                ]
+            }
+        });
+
+        let mut request = Bytes::from(serde_json::to_vec(&input_json).unwrap());
+
+        // Run the patcher
+        ensure_root(&mut request, &config);
+
+        let body = String::from_utf8(request.to_vec()).unwrap();
+
+        // EXPECTATION:
+        // Both URIs should be replaced by the docker internal path.
+        let expected_uri_one = "file:///usr/src/app/one";
+        let expected_uri_two = "file:///usr/src/app/two";
+
+        // Check that the first original URI is GONE
+        assert!(
+            !body.contains("file:///local/path/one"),
+            "The first workspace folder was NOT patched (or was reverted)!"
+        );
+
+        // Check that the second original URI is GONE
+        assert!(
+            !body.contains("file:///local/path/two"),
+            "The second workspace folder was NOT patched!"
+        );
+
+        // Check that the target URI appears twice
+        let matches = body.matches(expected_uri_one).count();
+        assert_eq!(
+            matches, 1,
+            "Expected the docker URI to appear once, found it {} times",
+            matches
+        );
+
+        // Check that the target URI appears twice
+        let matches = body.matches(expected_uri_two).count();
+        assert_eq!(
+            matches, 1,
+            "Expected the docker URI to appear once, found it {} times",
+            matches
         );
     }
 }

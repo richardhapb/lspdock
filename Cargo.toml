@@ -2,6 +2,10 @@
 name = "lspdock"
 version = "0.2.6"
 edition = "2024"
+description = "An LSP proxy to run LSP inside Docker containers."
+license-file = "LICENSE"
+documentation = "https://github.com/richardhapb/lspdock/blob/main/README.md"
+repository = "https://github.com/richardhapb/lspdock"
 
 [dependencies]
 clap = { version = "4.5.53", features = ["derive"] }

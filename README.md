@@ -44,15 +44,23 @@ flowchart TD
 
 ## Installation
 
-Download the [release](https://github.com/richardhapb/lspdock/releases) for your system, or build it from source.
+### Download Binary
 
-## Build from source
+Download the [release](https://github.com/richardhapb/lspdock/releases) for your system.
 
-### Prerequisites
+### Install from Cargo
+
+```bash
+cargo install lspdock
+```
+
+### Build from source
+
+#### Prerequisites
 
 - **Rust**: Ensure you have Rust installed. You can install it using [rustup](https://rustup.rs/).
 
-### Steps
+#### Steps
 
 1. Clone the repository:
    ```bash
